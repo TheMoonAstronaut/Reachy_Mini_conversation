@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: reachymini_conversation
+Version: 1.0.0
+Summary: Reachy Mini Conversation App with Doubao LLM and tool calling
+Requires-Python: >=3.10
+Requires-Dist: reachy_mini
+Requires-Dist: reachy_mini_dances_library
+Requires-Dist: websockets
+Requires-Dist: httpx
+Requires-Dist: gradio
+Requires-Dist: fastapi
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: ruff; extra == "dev"

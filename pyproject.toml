@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachymini_conversation"
+version = "1.0.0"
+description = "Reachy Mini Conversation App with Doubao LLM and tool calling"
+requires-python = ">=3.10"
+dependencies = [
+    "reachy_mini",
+    "reachy_mini_dances_library",
+    "websockets",
+    "httpx",
+    "gradio",
+    "fastapi",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["actions", "audio_animation", "profiles", "tools"]
+exclude = ["actions/__pycache__", "audio_animation/__pycache__", "profiles/__pycache__", "tools/__pycache__"]
+
+[tool.setuptools.package-dir]
+"" = "."

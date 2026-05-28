@@ -1,0 +1,11 @@
+reachy_mini
+reachy_mini_dances_library
+websockets
+httpx
+gradio
+fastapi
+
+[dev]
+pytest
+black
+ruff
