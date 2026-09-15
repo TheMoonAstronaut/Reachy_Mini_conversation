@@ -1,0 +1,62 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ===== Packaging =====
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+pip-wheel-metadata/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+
+# ===== Secrets / User config (NEVER commit) =====
+.env
+.env.*
+!.env.example
+.reachymini/
+*.local.json
+env.local.json
+
+# ===== Cache =====
+.cache/
+
+# ===== Temp / Output (project-specific) =====
+temp_*.wav
+output_*.wav
+*.wav
+!docs/**/*.wav
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ===== ModelScope (FunASR first-time download) =====
+# Initial pull goes to ~/.cache/modelscope/ — outside the repo by default.
+# If a user manually places a local mirror inside the repo, ignore it.
+modelscope/
+funasr-cache/
+
+# ===== HF dataset cache (decision 16D exception: only first run) =====
+# Only the metadata is mirrored; large files stay under ~/.cache/huggingface/
+hf_cache/
+
+# ===== OS junk =====
+Thumbs.db
+ehthumbs.db
+desktop.ini

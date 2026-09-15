@@ -1,0 +1,101 @@
+# =============================================================================
+# CI — lint + smoke 两个并行 job(Shift Left:问题尽量拦在 PR 阶段)
+# =============================================================================
+# 设计取舍(2026-09-11,P8):
+#
+# 1. 为什么 smoke job 是"退化版"而不跑完整 pytest?
+#    plan.md §5 风险表:"GitHub Actions 没有 GStreamer/Libcairo → CI 只跑
+#    smoke test(import),不跑实际机器人"。实际操作中发现更严格:
+#    tests/smoke_test.py 会 import 全部重依赖(reachy_mini SDK、mediapipe、
+#    gradio、av 等),而 reachy_mini 的传递依赖 PyGObject 在 PyPI 只有 sdist
+#    (无 wheel),需 libcairo2-dev / libgirepository1.0-dev 等系统库才能编译;
+#    mediapipe 单 wheel 80MB+。在裸 GitHub runner 上 `pip install reachy_mini`
+#    必然失败或慢到不可用。因此 smoke job 退化为:
+#      a. pip install -e . --no-deps   — 验证打包元数据 + CLI 入口注册
+#      b. python -m compileall 全部源码 — 验证所有 .py 语法可编译(Shift Left
+#         能抓住的最大一类错误:语法/缩进/编码问题)
+#      c. python -c "import reachymini_conversation" — 验证包顶层可导入
+#         (__init__.py 为空,不触发重依赖)
+#    完整 pytest(111 个测试)只能在带 conda reachy 环境的自托管 runner 或
+#    本地跑;这不是摆设 —— 编译检查 + 打包检查在每次 PR 上真实执行。
+#
+# 2. 为什么 lint 只跑 `ruff check .` 不强制 format?
+#    pyproject.toml 已有 [tool.ruff] 配置(legacy 根目录文件在 extend-exclude
+#    里豁免,P8 决策:lint 错误不阻塞 legacy 迁移)。格式化由 black 本地管,
+#    CI 不做 format gate,避免 PR 被格式噪音阻塞。
+#
+# 3. 旧版单 job(conda + apt 系统依赖 + 全量 pytest)已废弃:
+#    conda 环境解析 + apt 安装每次 5-10 分钟且脆弱(PyGObject 编译),
+#    不符合"CI 在 GitHub runner 上真实跑绿"的目标。
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # 允许手动触发(调试)
+  workflow_dispatch:
+
+# 同一分支/PR 的新 push 取消正在运行的旧 job,省 runner 配额
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: lint — ruff check(规则见 pyproject.toml [tool.ruff])
+  # ---------------------------------------------------------------------------
+  lint:
+    name: ruff check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      # legacy 根目录文件由 pyproject.toml extend-exclude 豁免;
+      # --no-fix:CI 不自动改代码,由 PR 作者自己修
+      - name: Ruff check
+        run: ruff check . --no-fix
+
+  # ---------------------------------------------------------------------------
+  # Job 2: smoke — 打包 + 编译 + 顶层导入(退化版,原因见文件头注释)
+  # ---------------------------------------------------------------------------
+  smoke:
+    name: smoke (package + compile + import)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # --no-deps:重依赖(reachy_mini → PyGObject 需系统库编译、mediapipe 等)
+      # 在 PyPI 装不上/太重,见文件头注释。此步验证:
+      #   1. pyproject.toml 元数据合法(setuptools 能构建)
+      #   2. [project.scripts] CLI 入口 reachy-mini-conversation 注册成功
+      - name: Install package (no deps)
+        run: |
+          pip install -e . --no-deps
+          # CLI entry point 脚本应已生成(只验证存在,不执行 —— 执行需要重依赖)
+          command -v reachy-mini-conversation
+
+      # compileall 只做语法编译不 import,不需要任何第三方依赖。
+      # 排除:隐藏目录(.git 等)、egg-info、__pycache__
+      - name: Compile all sources
+        run: python -m compileall -q -x '/(\.|[^/]*egg-info|__pycache__)' .
+
+      # 顶层包 __init__.py 为空,不触发重依赖;验证包结构可被 import 系统找到
+      - name: Import top-level package
+        run: python -c "import reachymini_conversation"

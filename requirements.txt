@@ -1,0 +1,46 @@
+# =============================================================================
+# Reachy Mini Conversation — pure pip fallback
+# =============================================================================
+# 大多数用户请用 environment.yml(conda 一键配)。
+# 仅当你不想用 conda 或在 Windows 调试时用这个。
+#
+# 决策 6/13 变更(2025-09-09):移除 funasr,改用豆包 ASR WebSocket 流式
+#
+# 用法:
+#   python -m venv .venv
+#   source .venv/bin/activate   # Windows: .venv\Scripts\activate
+#   pip install -r requirements.txt
+#   pip install -e .
+# =============================================================================
+
+# SDK
+reachy-mini>=1.10.0
+reachy-mini-dances-library
+
+# Web 框架
+gradio>=4.0
+fastapi
+uvicorn[standard]
+
+# LLM / ASR / TTS(豆包 LLM + 豆包 ASR WebSocket + Edge TTS)
+edge-tts
+httpx
+websockets
+
+# 音频 / 视频
+# numpy>=2.2.5 是 reachy_mini 1.10.0 的硬要求
+numpy>=2.2.5
+scipy
+soundfile
+av>=10.0
+
+# 配置
+python-dotenv
+
+# 手部跟随(P6 启用)
+mediapipe
+
+# 开发
+pytest
+black
+ruff
