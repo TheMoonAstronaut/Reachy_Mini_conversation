@@ -19,8 +19,7 @@ import brain
 import tts
 import audio
 import robot
-from actions.move_queue import MovementManager
-from audio_animation.head_wobbler import HeadWobbler
+from actions.movement import MovementManager  # P0.4: SDK play_move 已覆盖
 from tools.core_tools import ToolDependencies
 
 
@@ -34,7 +33,7 @@ class ReachyConversationSystem:
         self.brain: Optional[brain.DoubaoBrain] = None
         self.tts: Optional[tts.EdgeTTS] = None
         self.movement_manager: Optional[MovementManager] = None
-        self.head_wobbler: Optional[HeadWobbler] = None
+        # P0.4:删除 HeadWobbler 字段,改用 SDK enable_wobbling()
 
     async def initialize(self) -> None:
         logger.info("=" * 60)
@@ -46,14 +45,15 @@ class ReachyConversationSystem:
         r = robot.get_shared_robot()
         logger.info("[INIT] Robot ready")
 
-        logger.info("[INIT] Starting movement manager...")
+        logger.info("[INIT] Starting movement manager (shim)...")
         self.movement_manager = MovementManager(current_robot=r)
         self.movement_manager.start()
-        logger.info("[INIT] Movement manager started")
+        logger.info("[INIT] Movement manager ready")
 
-        self.head_wobbler = HeadWobbler(set_speech_offsets=self.movement_manager.set_speech_offsets)
-        self.head_wobbler.start()
-        logger.info("[INIT] Head wobbler started")
+        # P0.4:用 SDK enable_wobbling() 替代 HeadWobbler
+        logger.info("[INIT] Enabling audio-reactive wobbling...")
+        r.enable_wobbling()
+        logger.info("[INIT] Wobbling enabled")
 
         self.audio = audio.ReachyAudioInput()
         self.audio.start()
@@ -62,7 +62,6 @@ class ReachyConversationSystem:
         deps = ToolDependencies(
             reachy_mini=r,
             movement_manager=self.movement_manager,
-            head_wobbler=self.head_wobbler,
         )
 
         self.brain = brain.DoubaoBrain(provider=config.BRAIN_CONFIG["provider"])
@@ -77,8 +76,12 @@ class ReachyConversationSystem:
     async def cleanup(self) -> None:
         logger.info("[CLEANUP] Shutting down...")
 
-        if self.head_wobbler:
-            self.head_wobbler.stop()
+        # P0.4:关闭 wobbling
+        try:
+            r = robot.get_shared_robot()
+            r.disable_wobbling()
+        except Exception as e:
+            logger.warning("disable_wobbling failed: %s", e)
 
         if self.movement_manager:
             self.movement_manager.stop()

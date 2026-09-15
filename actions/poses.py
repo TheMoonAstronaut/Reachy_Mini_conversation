@@ -5,9 +5,8 @@ Sleep pose: contraction pose from SDK SLEEP_HEAD_JOINT_POSITIONS
 """
 
 from dataclasses import dataclass
-from typing import Tuple
-import numpy as np
 
+import numpy as np
 from reachy_mini.utils import create_head_pose
 
 
@@ -16,7 +15,7 @@ class FullBodyPose:
     """Full body pose with head, antennas, and body yaw."""
 
     head_pose: np.ndarray
-    antennas: Tuple[float, float]
+    antennas: tuple[float, float]
     body_yaw: float
 
 

@@ -5,24 +5,154 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "reachymini_conversation"
 version = "1.0.0"
-description = "Reachy Mini Conversation App with Doubao LLM and tool calling"
+description = "Reachy Mini Conversation App — Web UI with Mujoco sim mirroring, local ASR, sound source localization, hand following"
 requires-python = ">=3.10"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Reachy Mini Conversation Contributors" }
+]
+keywords = ["reachy-mini", "robot", "conversation", "asr", "llm", "gradio", "mujoco"]
+
+# =============================================================================
+# 依赖列表 — 必须与 environment.yml + requirements.txt 保持一致
+# =============================================================================
+# SDK / 语音 / 视觉 / Web / 配置 五个分组
+# 添加新依赖前:在 agents.local.md §3 检查是否在 plan.md 范围内
+# 决策 6/13 变更(2025-09-09):移除 funasr(详见 agents.local.md §9)
 dependencies = [
-    "reachy_mini",
+    # ---- SDK ----
+    "reachy_mini>=1.10.0",
     "reachy_mini_dances_library",
-    "websockets",
-    "httpx",
-    "gradio",
+
+    # ---- 数值 / 音频基础 ----
+    "numpy>=2.2.5",  # reachy_mini 1.10.0 要求 numpy>=2.2.5
+    "scipy",
+    "soundfile",
+
+    # ---- Web 框架 ----
+    "gradio>=4.0",
     "fastapi",
+    "uvicorn[standard]",
+
+    # ---- LLM / ASR / TTS ----
+    # 豆包 LLM(决策 6):ark.cn-beijing.volces.com/api/v3
+    # 豆包 ASR(决策 6 变更):WebSocket 流式,openspeech.bytedance.com
+    "edge-tts",
+    "httpx",
+    "websockets",
+
+    # ---- 手部跟随(P6 启用)----
+    "mediapipe",
+
+    # ---- 视频/音频解码 ----
+    "av>=10.0",
+
+    # ---- 配置 ----
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff"]
+dev = ["pytest", "black", "ruff", "mypy"]
+# 后续可加:
+# gpu = ["onnxruntime-gpu", "torch"]
 
+[project.urls]
+# 等用户定 GitHub 仓库后填
+# Homepage = "https://github.com/<user>/reachy-mini-conversation"
+# Issues = "https://github.com/<user>/reachy-mini-conversation/issues"
+# Changelog = "https://github.com/<user>/reachy-mini-conversation/blob/main/CHANGELOG.md"
+
+# =============================================================================
+# CLI 入口(plan.md §3 / P0_TASKS.md P0.2)
+# =============================================================================
+# 三个入口:
+#   1. reachy-mini-conversation  — 推荐方式(包装 python -m)
+#   2. python -m reachymini_conversation  — 标准方式
+#   3. python main.py  — 兼容入口(P0 保留,P8 弃用)
+# =============================================================================
+[project.scripts]
+reachy-mini-conversation = "reachymini_conversation.app:main"
+
+# =============================================================================
+# 包发现
+# =============================================================================
+# 当前(P0.2):同时包含老的扁平布局子包 + 新的 reachymini_conversation/ 子包
+# P0.4 删除重复实现后,会收窄到只包含 reachymini_conversation/
+# =============================================================================
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["actions", "audio_animation", "profiles", "tools"]
-exclude = ["actions/__pycache__", "audio_animation/__pycache__", "profiles/__pycache__", "tools/__pycache__"]
+include = [
+    "reachymini_conversation",
+    "reachymini_conversation.*",
+    "actions",
+    "audio_animation",
+    "profiles",
+    "tools",
+]
+exclude = [
+    "reachymini_conversation.egg-info",
+    "tests",
+    "docs",
+    "scripts",
+]
 
 [tool.setuptools.package-dir]
 "" = "."
+
+# =============================================================================
+# 工具配置
+# =============================================================================
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# Legacy 根目录文件(P0 兼容保留,P1+ 用 reachymini_conversation/ 子包)
+# P8 阶段:这些文件 lint 错误保留(后续 P+ 阶段逐步迁,不在 P8 阻塞)
+extend-exclude = [
+    "main.py",
+    "config.py",
+    "utils.py",
+    "audio.py",
+    "robot.py",
+    "brain.py",
+    "asr.py",
+    "tts.py",
+    "gradio_personality.py",
+    "__init__.py",  # root-level package init
+    "docs/*",        # 文档里嵌入的代码片段
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = [
+    "E501",  # line-too-long 由 black 管
+    "B008",   # 函数调用默认值
+    # N999:Reachy_Mini_conversation 是合法 Python package 名(GitHub 仓库名继承)
+    # N802:get_DoA 是 SDK AudioDoA API(P5),不能改
+    # N806:BaseOptions / HandLandmarker 等是 mediapipe tasks API(P6),不能改
+    "N999", "N802", "N806",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests:允许 unused imports(mock 用)
+"tests/*" = ["F401", "F811"]
+# Scripts:工具脚本,允许 print / assert
+"scripts/*" = ["T201"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 同时支持 test_*.py 和 *_test.py(p0 用 smoke_test.py)
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra --strict-markers"
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true

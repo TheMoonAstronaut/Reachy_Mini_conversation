@@ -1,8 +1,7 @@
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from tools.core_tools import Tool, ToolDependencies
-
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,7 @@ class IdleDoNothing(Tool):
         "required": [],
     }
 
-    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
+    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         reason = kwargs.get("reason", "idle turn")
         logger.info("Tool call: idle_do_nothing reason=%s", reason)
         return {"status": "idle", "reason": reason}

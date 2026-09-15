@@ -1,25 +1,24 @@
 from __future__ import annotations
-import re
+
 import abc
-import sys
-import json
 import asyncio
-import inspect
-import logging
 import importlib
 import importlib.util
-from typing import TYPE_CHECKING, Any, Dict, List
-from pathlib import Path
+import inspect
+import json
+import logging
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from reachy_mini import ReachyMini
-
 
 logger = logging.getLogger(__name__)
 
 
-ALL_TOOLS: Dict[str, "Tool"] = {}
-ALL_TOOL_SPECS: List[Dict[str, Any]] = []
+ALL_TOOLS: dict[str, Tool] = {}
+ALL_TOOL_SPECS: list[dict[str, Any]] = []
 _TOOLS_INITIALIZED = False
 
 
@@ -27,8 +26,8 @@ class MissingToolFileError(FileNotFoundError):
     pass
 
 
-def get_concrete_subclasses(base: type[Tool]) -> List[type[Tool]]:
-    result: List[type[Tool]] = []
+def get_concrete_subclasses(base: type[Tool]) -> list[type[Tool]]:
+    result: list[type[Tool]] = []
     for cls in base.__subclasses__():
         if not inspect.isabstract(cls):
             result.append(cls)
@@ -42,25 +41,31 @@ class ToolDependencies:
     movement_manager: Any
     camera_worker: Any | None = None
     vision_processor: Any | None = None
-    head_wobbler: Any | None = None
+    # P0.4:删除 head_wobbler 字段(SDK enable_wobbling() 已覆盖)
     motion_duration_s: float = 1.0
+    # P6:手部跟随器(可选,LLM 工具调用 start/stop_hand_follow)
+    hand_follower: Any | None = None
 
 
 class Tool(abc.ABC):
     name: str
     description: str
-    parameters_schema: Dict[str, Any]
+    parameters_schema: dict[str, Any]
 
-    def spec(self) -> Dict[str, Any]:
+    def spec(self) -> dict[str, Any]:
+        # OpenAI / Ark Chat Completions 标准格式(P7 真 function calling)
+        # 必须用 "function" 嵌套(否则 Ark 报 MissingParameter)
         return {
             "type": "function",
-            "name": self.name,
-            "description": self.description,
-            "parameters": self.parameters_schema,
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters_schema,
+            },
         }
 
     @abc.abstractmethod
-    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
+    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -86,10 +91,18 @@ def _initialize_tools() -> None:
     if _TOOLS_INITIALIZED:
         return
 
-    from tools.tool_constants import SystemTool
-
-    tool_names = ["dance", "stop_dance", "move_head", "idle_do_nothing"]
-    tool_names.extend({tool.value for tool in SystemTool})
+    # P0.4:删除 tool_constants 依赖(SystemTool enum 已废弃)
+    # 显式声明要 import 的工具模块(供 get_concrete_subclasses 扫描子类)
+    tool_names = [
+        "dance",
+        "stop_dance",
+        "move_head",
+        "idle_do_nothing",
+        "look_at_sound",  # P5
+        "start_hand_follow",  # P6
+        "stop_hand_follow",  # P6
+        "play_emotion",  # P7 决策 16D
+    ]
 
     for tool_name in tool_names:
         try:
@@ -109,11 +122,13 @@ def _initialize_tools() -> None:
 _initialize_tools()
 
 
-def get_tool_specs(exclusion_list: list[str] = []) -> list[Dict[str, Any]]:
-    return [spec for spec in ALL_TOOL_SPECS if spec.get("name") not in exclusion_list]
+def get_tool_specs(exclusion_list: list[str] | None = None) -> list[dict[str, Any]]:
+    # 默认 None 避免可变默认参数(B006);空列表等价于不过滤
+    excluded = exclusion_list or []
+    return [spec for spec in ALL_TOOL_SPECS if spec.get("name") not in excluded]
 
 
-def _safe_load_obj(args_json: str) -> Dict[str, Any]:
+def _safe_load_obj(args_json: str) -> dict[str, Any]:
     try:
         parsed_args = json.loads(args_json or "{}")
         return parsed_args if isinstance(parsed_args, dict) else {}
@@ -122,7 +137,7 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDependencies) -> Dict[str, Any]:
+async def _dispatch_tool_call(tool_name: str, args: dict[str, Any], deps: ToolDependencies) -> dict[str, Any]:
     tool = ALL_TOOLS.get(tool_name)
     if not tool:
         return {"error": f"unknown tool: {tool_name}"}
@@ -137,5 +152,5 @@ async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDe
         return {"error": msg}
 
 
-async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
+async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> dict[str, Any]:
     return await _dispatch_tool_call(tool_name, _safe_load_obj(args_json), deps)
