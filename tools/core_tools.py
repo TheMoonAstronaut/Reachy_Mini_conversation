@@ -98,6 +98,7 @@ def _initialize_tools() -> None:
         "stop_dance",
         "move_head",
         "idle_do_nothing",
+        "idle_sway",  # 2026-09-16:呼吸式待机微动(用户点名的"待机动作")
         "look_at_sound",  # P5
         "start_hand_follow",  # P6
         "stop_hand_follow",  # P6

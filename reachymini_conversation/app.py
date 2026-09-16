@@ -162,15 +162,46 @@ class ConversationApp(ReachyMiniApp):
             logger.info("[V2] ModeManager 就绪(UI 下拉可切换真机模式)")
 
             # V2.4:真机语音环路(real 模式 + 语音模式时采真机麦克风)
-            from reachymini_conversation.web_ui import get_pipeline, set_orchestrator
+            from reachymini_conversation.web_ui import (
+                get_pipeline,
+                get_tool_deps_global,
+                set_orchestrator,
+            )
             from reachymini_conversation.real_voice import RealVoiceLoop
 
             set_orchestrator(self._orchestrator)
-            self._real_voice_loop = RealVoiceLoop(self._orchestrator, get_pipeline())
+            pipeline = get_pipeline()
+            # V2 fix(2026-09-16):real 语音路径漏注入 tool_deps —— LLM 无工具
+            # 可调,只能把"调用 dance 工具"当文本念出来(伪调用,机器人不动)。
+            # 与 web_ui 文本/录音路径共享同一 deps(镜像双实例)。
+            _td = get_tool_deps_global()
+            if _td is not None:
+                pipeline.tool_deps = _td
+            self._real_voice_loop = RealVoiceLoop(self._orchestrator, pipeline)
             self._real_voice_loop.start()
             logger.info("[V2] RealVoiceLoop 就绪(真机麦克风免提,待命)")
         except Exception as e:
             logger.warning(f"[V2] ModeManager/RealVoiceLoop 初始化失败: {e}")
+
+        # 2.9 空闲待机呼吸(官方 BreathingMove 移植:无命令时头部微动+天线摆动)
+        self._idle_breath: Any = None
+        try:
+            from reachymini_conversation.idle_breath import IdleBreathController
+            from reachymini_conversation.mirror_orchestrator import MirroredToolTarget
+
+            def _idle_pose_getter() -> Any:
+                sim = self._orchestrator.sim_mini
+                pose = sim.get_current_head_pose()
+                _, antennas = sim.get_current_joint_positions()
+                return pose, antennas
+
+            self._idle_breath = IdleBreathController(
+                MirroredToolTarget(self._orchestrator),  # 呼吸镜像到 sim + real
+                pose_getter=_idle_pose_getter,
+            )
+            self._idle_breath.start()
+        except Exception as e:
+            logger.warning(f"[idle-breath] 初始化失败(不影响其余功能): {e}")
 
         # 3. MJPEG 推流 FastAPI(独立端口 7861)
         logger.info(f"[P2] Starting camera stream on {self.stream_host}:{self.stream_port}")

@@ -51,7 +51,9 @@ _TOOL_NAME_MAP = {
     "摇头": "move_head",
     "停": "stop_dance",
     "不动": "idle_do_nothing",
-    "待机": "idle_do_nothing",
+    "待机": "idle_sway",  # 2026-09-16:待机=呼吸微动序列(原来映射到"完全不动")
+    "休息": "idle_sway",
+    "待命": "idle_sway",
 }
 
 
