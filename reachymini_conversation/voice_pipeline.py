@@ -205,7 +205,17 @@ class VoicePipeline:
 
     # ---------- TTS 内部 ----------
     async def _speak(self, text: str) -> None:
-        """Edge TTS 合成 + 推到机器人(sim / 真机)。"""
+        """Edge TTS 合成 + 推到机器人(sim / 真机)。
+
+        合成前先 clean_text_for_tts:LLM 回复是 Markdown,直接送 TTS 会把
+        `**`、`_` 等结构符念出来(下划线被念成"下划线",P0-1 实测痛点)。
+        """
+        from reachymini_conversation.utils.text_clean import clean_text_for_tts
+
+        text = clean_text_for_tts(text)
+        if not text:
+            logger.info("[Pipeline] 清洗后无可播报文本,跳过 TTS")
+            return
         try:
             self.bus.update("status", STATE_PLAYING)
 

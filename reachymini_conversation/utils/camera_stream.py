@@ -29,12 +29,13 @@ import asyncio
 import io
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +254,52 @@ def create_camera_stream_app(
             "frames_attempted": sim_feed_stats["frames_attempted"],
             "last_frame_age_sec": last_age,
         }
+
+    # ---------- P0-1:TTS 自动播放(WebAudio 一次性解锁方案)----------
+    # 背景:浏览器 autoplay policy 拦截 <audio autoplay>(gr.Audio autoplay=True
+    # 生成的元素在页面无用户手势前被静音)。前端 tts_autoplay.js 改为:
+    # 首个用户手势一次性 resume() AudioContext 解锁,之后 500ms 轮询本端点,
+    # (path, mtime) 变化即 fetch /api/tts_audio → decodeAudioData → 播放。
+    # 变更检测用 (path, mtime) 元组,后端免维护单调序号(无状态)。
+    def _tts_state_payload() -> dict[str, object]:
+        from reachymini_conversation.state_bus import get_state_bus
+
+        snap = get_state_bus().snapshot()
+        run_mode = snap.get("run_mode") or "pure_sim"
+        path = snap.get("last_audio_path")
+        exists = bool(path) and os.path.isfile(path)
+        return {
+            "available": exists,
+            # 仅纯仿真让浏览器播:real_plus_sim 时 TTS 已路由真机扬声器
+            # (voice_pipeline push_audio_fn / RealVoiceLoop),浏览器再播会双重发声。
+            "should_play": bool(exists) and run_mode == "pure_sim",
+            "run_mode": run_mode,
+            "path": path if exists else None,
+            "mtime": round(os.path.getmtime(path), 6) if exists else None,
+        }
+
+    @app.get("/api/tts_state")
+    async def tts_state() -> dict[str, object]:
+        """TTS 自动播放状态轮询(JSON)。字段语义见 _tts_state_payload。"""
+        return _tts_state_payload()
+
+    @app.get("/api/tts_audio")
+    async def tts_audio() -> Response:
+        """返回最新 TTS wav 字节(FileResponse,带 Range/etag 支持)。
+
+        no-store:同一轮对话里浏览器必须拿到当次 wav,不能走启发式缓存。
+        无可用音频时 404(前端轮询期间属正常情况,不算错误)。
+        """
+        from reachymini_conversation.state_bus import get_state_bus
+
+        path = get_state_bus().snapshot().get("last_audio_path")
+        if not path or not os.path.isfile(path):
+            return Response(content=b"no tts audio available", status_code=404)
+        return FileResponse(
+            path,
+            media_type="audio/wav",
+            headers={"Cache-Control": "no-store"},
+        )
 
     # ---------- /scene_feed(场景流 studio_close,640x640)----------
     # 帧源来自 daemon_launcher patch 的 UDP:5006 → SceneUdpReceiver;

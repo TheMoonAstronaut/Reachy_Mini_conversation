@@ -116,6 +116,16 @@ def set_tool_deps(deps: Any) -> None:
     _TOOL_DEPS_GLOBAL = deps
 
 
+def get_tool_deps_global() -> Any:
+    """返回 app.py 注入的 ToolDependencies(未注入返回 None)。
+
+    供 app.py 在构造 RealVoiceLoop 时给共享 pipeline 注入 tool_deps ——
+    2026-09-16 bug:real 语音路径漏注入,LLM 无工具可调,只能把
+    "调用 dance 工具"当文本念出来(伪调用,机器人不动)。
+    """
+    return _TOOL_DEPS_GLOBAL
+
+
 def _get_reachy_mini_for_deps() -> Any:
     """兜底:没注入 deps 时,造一个空 reachy_mini(工具调用会失败但 LLM 仍能回复)。
 
@@ -500,6 +510,13 @@ def build_ui() -> gr.Blocks:
                         interactive=False,
                         elem_classes=["rm-tts"],
                     )
+                # P0-1:WebAudio 自动播放(<audio autoplay> 被浏览器策略拦截,
+                # 改走 AudioContext 一次性解锁 + 轮询 7861 /api/tts_*)。
+                # tts_player 保留作手动重播回退;本组件是自动播报通道。
+                gr.HTML(
+                    value=_TTS_AUTOPLAY_HTML,
+                    js_on_load=_TTS_AUTOPLAY_JS_ON_LOAD,
+                )
                 # V2.3:语音免提模式(流式麦克风,说完自动识别并回复,持续聆听)
                 voice_mic = gr.Audio(
                     sources=["microphone"],
@@ -654,7 +671,9 @@ def build_ui() -> gr.Blocks:
         # ---------- Timer 每秒刷新 ----------
         timer = gr.Timer(value=1.0, active=True)
 
-        async def tick_async() -> dict[str, Any]:
+        _tick_state = {"last_voice_turn_seq": 0}  # 已消费的语音轮次序号
+
+        async def tick_async(history: list[dict[str, Any]]) -> dict[str, Any]:
             snap = bus.snapshot()
             run_mode = snap.get("run_mode", "pure_sim")
             # 主区:轮询 /scene_feed_status(场景流),按 availability 切换 真视频 ↔ 占位
@@ -687,6 +706,19 @@ def build_ui() -> gr.Blocks:
             else:
                 eye_html = _eye_feed_html(run_mode=run_mode, eye_available=True)
                 eye_status_md_text = "_real 模式:副视角直连真机摄像头 `/camera_feed`_"
+            # real+voice 语音轮次回写:RealVoiceLoop 后台线程识别/回复后写 bus,
+            # tick 发现新 seq 时 append 到 chatbot(用户可见"我说了什么/机器人答了什么")
+            chatbot_update: Any = gr.update()
+            vt_seq = snap.get("voice_turn_seq") or 0
+            if vt_seq and vt_seq != _tick_state["last_voice_turn_seq"]:
+                _tick_state["last_voice_turn_seq"] = vt_seq
+                vt = snap.get("voice_turn") or {}
+                if vt.get("user"):
+                    history = history + [
+                        {"role": "user", "content": f"🎤 {vt['user']}"},
+                        {"role": "assistant", "content": vt.get("reply") or "(无回复)"},
+                    ]
+                    chatbot_update = history
             return {
                 status_pill: _render_status(snap),
                 mode_pill: _render_run_mode(
@@ -702,11 +734,12 @@ def build_ui() -> gr.Blocks:
                 scene_feed_status_md: scene_status_md_text,
                 eye_feed_html: eye_html,
                 eye_feed_status_md: eye_status_md_text,
+                chatbot: chatbot_update,
             }
 
         timer.tick(
             tick_async,
-            inputs=[],
+            inputs=[chatbot],
             outputs=[
                 status_pill,
                 mode_pill,
@@ -720,6 +753,7 @@ def build_ui() -> gr.Blocks:
                 scene_feed_status_md,
                 eye_feed_html,
                 eye_feed_status_md,
+                chatbot,
             ],
         )
 
@@ -869,8 +903,16 @@ def build_ui() -> gr.Blocks:
             所有失败路径都落到 Chatbot 友好提示 + bus error,不 crash。
             """
             bus = get_state_bus()
+            # P0-2 埋点:诊断"浏览器麦根本没把音频送来 vs 后端处理失败"。
+            # 若用户点录/停后日志无此行 → 前端组件/权限层问题,音频未到后端。
             if audio is None:
+                logger.info("[voice] on_mic_stop 触发但 audio=None(未录到数据)")
                 return history, gr.update()
+            _sr, _data = audio
+            logger.info(
+                "[voice] on_mic_stop 收到录音: sr=%s, samples=%s, dtype=%s",
+                _sr, getattr(_data, "shape", None), getattr(_data, "dtype", None),
+            )
 
             bus.update("status", STATE_LISTENING)
 
@@ -898,6 +940,28 @@ def build_ui() -> gr.Blocks:
                     {"role": "assistant", "content": "🎤 没有录到声音,请再试一次。"},
                 ]
                 return history, gr.update()
+
+            # P0-2 诊断:pcm 响度(rms)+ 存盘回放。豆包服务端判"无语音"会
+            # 1s 秒关连接(2026-09-15 实测)——rms 接近 0 即确认录到静音,
+            # /tmp/last_mic_input.wav 可 ffplay 回放验证采到的是哪个设备。
+            _arr = np.frombuffer(pcm, dtype="<i2")
+            _rms = float(np.sqrt(np.mean(_arr.astype("float32") ** 2))) if _arr.size else 0.0
+            logger.info(
+                "[voice] pcm 就绪: %d bytes (%.1fs @16k), rms=%.1f %s",
+                len(pcm), len(pcm) / 2 / 16000, _rms,
+                "⚠️ 近静音!" if _rms < 100 else "",
+            )
+            try:
+                import wave as _wave
+
+                with _wave.open("/tmp/last_mic_input.wav", "wb") as _w:
+                    _w.setnchannels(1)
+                    _w.setsampwidth(2)
+                    _w.setframerate(16000)
+                    _w.writeframes(pcm)
+                logger.info("[voice] 调试录音已存 /tmp/last_mic_input.wav")
+            except Exception as _e:
+                logger.warning("[voice] 调试录音存盘失败: %s", _e)
 
             # 2. run_audio:ASR → LLM → TTS(pipeline 内部已 try/except + bus 状态流转)
             pipeline = get_pipeline()
@@ -964,6 +1028,7 @@ def build_ui() -> gr.Blocks:
         def on_chat_mode_change(mode: str) -> dict:
             """💬/🎤 切换:文本组件 ↔ 流式麦克风 的可见性;chat_mode 写 bus
             (real_voice 线程据此决定是否采真机麦克风)。"""
+            logger.info("[voice] chat_mode 切换 → %s", mode)  # P0-2 埋点
             _voice_vad.reset()
             get_state_bus().update("chat_mode", mode)
             run_mode = get_state_bus().get("run_mode", "pure_sim")
@@ -988,6 +1053,21 @@ def build_ui() -> gr.Blocks:
         ):
             """流式 chunk → VAD 分句 → 完整语句跑 pipeline(async 生成器,
             只有"说完一句"时才 yield 更新,其余 chunk 静默)。 """
+            # P0-2 埋点:首个 chunk 记 INFO(证明浏览器流式麦已推流到后端),
+            # 之后每 100 chunk 记 DEBUG 防刷屏。用户开免提后日志无
+            # "首个 stream chunk" → 组件未推流(权限/组件层),音频未到后端。
+            if not hasattr(on_voice_stream, "_chunk_count"):
+                on_voice_stream._chunk_count = 0
+            on_voice_stream._chunk_count += 1
+            if on_voice_stream._chunk_count == 1:
+                if audio is not None:
+                    logger.info(
+                        "[voice] 首个 stream chunk: sr=%s, shape=%s, dtype=%s",
+                        audio[0], getattr(audio[1], "shape", None),
+                        getattr(audio[1], "dtype", None),
+                    )
+                else:
+                    logger.info("[voice] 首个 stream chunk 为 None")
             if audio is None:
                 return
             sample_rate, data = audio
@@ -1182,6 +1262,64 @@ def _scene_feed_html(*, scene_available: bool) -> str:
         alt="MuJoCo scene feed (studio_close)",
         available=scene_available,
     )
+
+
+# ============================================================================
+# P0-1:TTS 自动播放(WebAudio 一次性解锁方案)
+# ----------------------------------------------------------------------------
+# 浏览器 autoplay policy:页面无用户手势前 <audio autoplay>(gr.Audio)被静音
+# 拦截。改由 tts_autoplay.js:首个手势 resume() AudioContext 解锁,之后轮询
+# 7861 /api/tts_state,(path, mtime) 变化即 fetch /api/tts_audio 解码播放。
+# `?v=` 版本号防 ES module 强缓存(同 _VIEWER_JS_VERSION 教训,改了记得 bump)。
+# ============================================================================
+_TTS_AUTOPLAY_JS_VERSION = "20260915b"
+
+_TTS_AUTOPLAY_JS_ON_LOAD = f"""
+(async () => {{
+  try {{
+    const mod = await import('http://localhost:7861/static/js/tts_autoplay.js?v={_TTS_AUTOPLAY_JS_VERSION}');
+    mod.mount(element, {{ baseUrl: 'http://localhost:7861' }});
+  }} catch (e) {{
+    console.error('[reachy-tts] 自动播放模块加载失败:', e);
+    const pill = element.querySelector('#reachy-tts-autoplay-pill');
+    if (pill) {{
+      pill.textContent = '⚠️ 自动播放模块加载失败 — 检查 7861 端口服务';
+      pill.dataset.tone = 'warn';
+    }}
+  }}
+}})();
+""".strip()
+
+# 状态徽章:图标+文字双语义(不只靠颜色,WCAG 2.1 AA);aria-live 供读屏。
+# 音量条:0-200%(Edge TTS 原始响度偏小,允许 2x),GainNode 实时调,
+# localStorage 持久化(键 reachy.ttsVolume)。
+_TTS_AUTOPLAY_HTML = """
+<div class="rm-tts-bar">
+  <span id="reachy-tts-autoplay-pill" data-tone="locked" role="status" aria-live="polite">
+    🔇 点击页面任意处,启用语音自动播放
+  </span>
+  <label class="rm-tts-vol" for="reachy-tts-volume">
+    🔉
+    <input type="range" id="reachy-tts-volume" min="0" max="200" step="5" value="100"
+           aria-label="语音播报音量(百分比)">
+    <span id="reachy-tts-volume-val" aria-hidden="true">100%</span>
+  </label>
+</div>
+<style>
+.rm-tts-bar { display:flex; align-items:center; gap:12px; margin-top:4px; flex-wrap:wrap; }
+#reachy-tts-autoplay-pill {
+  display:inline-block; padding:6px 12px; border-radius:6px;
+  border:1px solid #2A3442; background:#0D1117; color:#8B98AB;
+  font-size:12.5px; line-height:1.4;
+}
+#reachy-tts-autoplay-pill[data-tone="ready"]   { color:#3FB950; border-color:#2B4A33; }
+#reachy-tts-autoplay-pill[data-tone="playing"] { color:#58A6FF; border-color:#274B73; }
+#reachy-tts-autoplay-pill[data-tone="warn"]    { color:#F0B72F; border-color:#5A4A1F; }
+.rm-tts-vol { display:inline-flex; align-items:center; gap:6px; color:#8B98AB; font-size:12.5px; }
+.rm-tts-vol input[type="range"] { width:120px; accent-color:#58A6FF; }
+#reachy-tts-volume-val { min-width:38px; text-align:right; font-variant-numeric:tabular-nums; }
+</style>
+""".strip()
 
 
 # ============================================================================
