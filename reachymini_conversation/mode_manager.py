@@ -48,6 +48,12 @@ class RealDaemonRunner:
     V2 加固(孤儿 daemon 教训):daemon B 以 start_new_session 独立进程组跑,
     宿主 app 重启不会连带杀它 —— 端口/串口会被残留 daemon 占住,新 daemon 起不来。
     所以 start() 前先探测:8001 上已有健康 daemon 就直接收养(不重起)。
+
+    2026-09-15 实测灾难(真机电机被断电):残留 daemon 占着端口但 state=error
+    (电机通信故障)时 _probe_ready() 失败,若直接新起,第二个 daemon 会:
+    打开 USB 串口成功 → wake_up 电机 → bind 端口失败 → shutdown 钩子执行
+    "Putting Reachy Mini to sleep" → 真机电机断电。因此:端口被占但不健康
+    时,必须先 TERM/KILL 清理僵尸并等端口释放,才允许新起。
     """
 
     def __init__(self, port: int = REAL_DAEMON_PORT, log_path: str = "/tmp/reachy-daemon-real.log"):
@@ -75,8 +81,59 @@ class RealDaemonRunner:
         except Exception:
             return False
 
+    def _find_occupant_pid(self) -> int | None:
+        """本端口上处于 LISTEN 的进程 PID;无占用或枚举失败 → None。"""
+        import psutil
+
+        try:
+            for conn in psutil.net_connections(kind="tcp"):
+                if (
+                    conn.laddr
+                    and conn.laddr.port == self.port
+                    and conn.status == psutil.CONN_LISTEN
+                ):
+                    return conn.pid
+        except (psutil.Error, PermissionError) as e:
+            logger.warning(f"[real-daemon] 枚举端口 {self.port} 占用失败: {e}")
+        return None
+
+    def _reap_pid(self, pid: int, timeout_s: float = 8.0) -> None:
+        """TERM → 等退出 → 超时 KILL;最后确认端口 LISTEN 已释放。"""
+        import psutil
+
+        try:
+            proc = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=timeout_s)
+        except psutil.TimeoutExpired:
+            logger.warning(f"[real-daemon] PID {pid} TERM 超时,升级 KILL")
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except (psutil.TimeoutExpired, psutil.NoSuchProcess):
+                pass
+        except psutil.NoSuchProcess:
+            return
+        # 确认端口释放(只有 LISTEN 占用会挡新 daemon bind;TIME_WAIT 不挡)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if self._find_occupant_pid() is None:
+                return
+            time.sleep(0.2)
+        logger.error(
+            f"[real-daemon] 端口 {self.port} 清理后仍被 LISTEN 占用,"
+            "新 daemon 可能 bind 失败"
+        )
+
     def start(self) -> None:
-        """后台起 daemon B;已有健康 daemon 在端口上则收养(幂等)。"""
+        """后台起 daemon B;已有健康 daemon 在端口上则收养(幂等)。
+
+        端口被占但不健康(state != running)时必须先清理僵尸再起新 daemon,
+        否则新 daemon bind 失败的 shutdown 钩子会 sleep 真机电机(见类 docstring)。
+        """
         if self._proc is not None and self._proc.poll() is None:
             logger.info(f"[real-daemon] 已在运行(PID {self._proc.pid})")
             return
@@ -84,6 +141,13 @@ class RealDaemonRunner:
             self._adopted = True
             logger.info(f"[real-daemon] 端口 {self.port} 已有健康 daemon,直接收养")
             return
+        occupant = self._find_occupant_pid()
+        if occupant is not None:
+            logger.warning(
+                f"[real-daemon] 端口 {self.port} 被 PID {occupant} 占用但不健康"
+                "(state != running)—— 清理僵尸 daemon 后重启"
+            )
+            self._reap_pid(occupant)
         cmd = [
             sys.executable, "-m", "reachy_mini.daemon.app.main",
             "--fastapi-port", str(self.port),
