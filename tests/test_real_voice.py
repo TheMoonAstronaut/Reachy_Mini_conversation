@@ -24,6 +24,7 @@ import pytest  # noqa: E402
 
 from reachymini_conversation.mirror_orchestrator import MirrorOrchestrator  # noqa: E402
 from reachymini_conversation.real_voice import RealVoiceLoop, make_tts_audio_router  # noqa: E402
+from reachymini_conversation.voice_loop import EnergyVAD  # noqa: E402
 from reachymini_conversation.state_bus import get_state_bus, reset_state_bus  # noqa: E402
 
 
@@ -200,7 +201,11 @@ def test_real_voice_loop_end_to_end():
     bus.update("chat_mode", "voice")
     bus.update("real_conn_type", "wireless")  # 走 real_mini.media(脚本化假音源)
     pipe = _FakePipeline()
-    loop = RealVoiceLoop(orch, pipe, idle_sleep_s=0.02)
+    loop = RealVoiceLoop(
+        orch, pipe, idle_sleep_s=0.02,
+        # 固定阈值 VAD:跳过自适应学习期(1.5s),保持脚本化音频的时序假设
+        vad=EnergyVAD(rms_threshold=0.015),
+    )
     loop.start()
     try:
         deadline = time.monotonic() + 5.0

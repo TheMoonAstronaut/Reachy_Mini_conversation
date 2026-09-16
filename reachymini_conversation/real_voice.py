@@ -40,13 +40,22 @@ logger = logging.getLogger(__name__)
 class RealVoiceLoop:
     """真机麦克风免提环路(后台线程)。"""
 
-    def __init__(self, orchestrator: Any, pipeline: Any, *, idle_sleep_s: float = 0.2) -> None:
+    def __init__(
+        self,
+        orchestrator: Any,
+        pipeline: Any,
+        *,
+        idle_sleep_s: float = 0.2,
+        vad: Any = None,
+    ) -> None:
         self._orch = orchestrator
         self._pipeline = pipeline
         self._idle_sleep_s = idle_sleep_s
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._vad = EnergyVAD()
+        # 默认自适应底噪 VAD(2026-09-16:固定阈值被环境底噪击穿);
+        # 测试可注入固定阈值 EnergyVAD(rms_threshold=...) 跳过学习期。
+        self._vad = vad if vad is not None else EnergyVAD()
         # 防声学反馈:真机扬声器播放 TTS 期间,麦克风会采到自己的声音 →
         # 再识别再回复 → 无限自言自语循环。播放期 + 余量内丢帧不喂 VAD。
         self._mute_until = 0.0
@@ -139,6 +148,18 @@ class RealVoiceLoop:
                     bus.update("error", f"real_voice: {type(e).__name__}: {e}")
                     result = None
                 self._vad.reset()
+                # 轮次回写 bus → UI tick 消费后 append 到 chatbot
+                # (2026-09-16 用户反馈:real+voice 模式对话框无任何文本反馈,
+                # 识别/回复只在后台跑,用户看不见自己说了什么、机器人答了什么)
+                if result is not None and getattr(result, "user_text", ""):
+                    bus.update("voice_turn_seq", (bus.get("voice_turn_seq") or 0) + 1)
+                    bus.update(
+                        "voice_turn",
+                        {
+                            "user": result.user_text,
+                            "reply": getattr(result, "reply_text", "") or "(无回复)",
+                        },
+                    )
                 # 估算播放时长,期间静音麦克风(run_audio 返回时播放刚开始)
                 if result is not None and getattr(result, "audio_path", None):
                     play_s = _wav_seconds(result.audio_path)

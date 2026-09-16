@@ -31,23 +31,55 @@ logger = logging.getLogger(__name__)
 # 默认阈值(float32 [-1,1] 的 RMS):安静房间底噪 ~0.001-0.01,正常说话 0.02+
 DEFAULT_RMS_THRESHOLD = 0.015
 
+# 自适应底噪(2026-09-16 实测:ReSpeaker 当前环境底噪 rms=0.024 > 固定阈值
+# 0.015 → VAD 永远"说话中" → 12s 超长截断循环 → ASR 空结果;板载声卡底噪
+# 0.04 同样击穿)。不传 rms_threshold 时启用:阈值 = 底噪EMA × 2.5,钳 [0.008, 0.1]。
+NOISE_RATIO = 2.5
+MIN_THRESHOLD = 0.008
+MAX_THRESHOLD = 0.10
+NOISE_EMA_ALPHA = 0.1  # 每 chunk 更新速率(~0.5s/chunk,约 5s 收敛到 63%)
+
 
 class EnergyVAD:
-    """能量 VAD 分句器(逐 chunk 喂,语句完整时返回)。"""
+    """能量 VAD 分句器(逐 chunk 喂,语句完整时返回)。
+
+    阈值两种模式:
+      - 显式传 rms_threshold → 固定阈值(测试/向后兼容)
+      - 默认 None → 自适应底噪:静音期维护底噪 EMA,阈值 = EMA×2.5
+        钳制在 [0.008, 0.10]。安静房间更灵敏,吵闹环境不死循环。
+    """
 
     def __init__(
         self,
-        rms_threshold: float = DEFAULT_RMS_THRESHOLD,
+        rms_threshold: float | None = None,
         min_speech_ms: float = 250.0,
         hangover_ms: float = 700.0,
         pre_speech_ms: float = 200.0,
         max_speech_s: float = 12.0,
+        *,
+        noise_ratio: float = NOISE_RATIO,
+        min_threshold: float = MIN_THRESHOLD,
+        max_threshold: float = MAX_THRESHOLD,
+        noise_ema_alpha: float = NOISE_EMA_ALPHA,
+        learn_s: float = 1.5,
     ) -> None:
-        self.rms_threshold = rms_threshold
+        self.rms_threshold = rms_threshold  # None → 自适应
         self.min_speech_ms = min_speech_ms
         self.hangover_ms = hangover_ms
         self.pre_speech_ms = pre_speech_ms
         self.max_speech_s = max_speech_s
+        self.noise_ratio = noise_ratio
+        self.min_threshold = min_threshold
+        self.max_threshold = max_threshold
+        self.noise_ema_alpha = noise_ema_alpha
+        # 冷启动学习期:前 learn_s 秒只学底噪不触发(防"EMA 初值低 → 底噪
+        # 被判语音 → 语句态不更新 EMA → 永远学不到"死锁,2026-09-16 实测)。
+        # 一次性:语句完成后的 reset() 不重置(环境底噪不因切句变化)。
+        self.learn_s = learn_s
+        self._learned = False
+        self._learn_elapsed = 0.0
+        # 底噪 EMA 初值:安静房间假设;reset() 不清(环境不因切句而改变)
+        self._noise_ema = DEFAULT_RMS_THRESHOLD / 2.0
 
         self._in_speech = False
         self._speech_chunks: list[np.ndarray] = []
@@ -78,9 +110,29 @@ class EnergyVAD:
             return None
         chunk_ms = len(samples) / sample_rate * 1000.0
         rms = float(np.sqrt(np.mean(samples**2)))
-        is_loud = rms >= self.rms_threshold
+        threshold = self._threshold()
+        is_loud = rms >= threshold
 
         if not self._in_speech:
+            if self.rms_threshold is None:
+                # 自适应:SILENCE 态所有 chunk 都学底噪(含 loud——loud 的
+                # 底噪正是要学的;语句开始后才停学,防语音污染估计)
+                a = self.noise_ema_alpha
+                self._noise_ema = (1.0 - a) * self._noise_ema + a * rms
+                if not self._learned:
+                    self._learn_elapsed += chunk_ms / 1000.0
+                    if self._learn_elapsed >= self.learn_s:
+                        self._learned = True
+                        logger.info(
+                            f"[VAD] 底噪学习完成: EMA={self._noise_ema:.4f},"
+                            f" 阈值={self._threshold():.4f}"
+                        )
+                    # 学习期不触发语句;前导缓冲照常维护
+                    self._pre_buffer.append(samples)
+                    self._pre_buffer_ms += chunk_ms
+                    while self._pre_buffer_ms > self.pre_speech_ms and len(self._pre_buffer) > 1:
+                        self._pre_buffer_ms -= len(self._pre_buffer.popleft()) / sample_rate * 1000.0
+                    return None
             if is_loud:
                 self._in_speech = True
                 self._speech_chunks = list(self._pre_buffer) + [samples]
@@ -88,7 +140,7 @@ class EnergyVAD:
                 self._silence_ms = 0.0
                 self._pre_buffer.clear()
                 self._pre_buffer_ms = 0.0
-                logger.debug(f"[VAD] 语句开始(rms={rms:.4f})")
+                logger.debug(f"[VAD] 语句开始(rms={rms:.4f}, 阈值={threshold:.4f})")
             else:
                 # 静音期:维护前导缓冲
                 self._pre_buffer.append(samples)
@@ -115,11 +167,20 @@ class EnergyVAD:
             seg = np.concatenate(self._speech_chunks)
             logger.info(
                 f"[VAD] 语句完成: {len(seg)/sample_rate:.1f}s "
-                f"(rms 峰值 {float(np.sqrt(np.max(seg**2))):.3f})"
+                f"(rms 峰值 {float(np.sqrt(np.max(seg**2))):.3f}, 阈值 {threshold:.4f})"
             )
             self.reset()
             return seg
         return None
+
+    def _threshold(self) -> float:
+        """当前生效阈值:显式传 rms_threshold 用固定值;否则按底噪 EMA 自适应。"""
+        if self.rms_threshold is not None:
+            return self.rms_threshold
+        return min(
+            max(self._noise_ema * self.noise_ratio, self.min_threshold),
+            self.max_threshold,
+        )
 
     @staticmethod
     def _to_f32_mono(data: Any) -> np.ndarray:
