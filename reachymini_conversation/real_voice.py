@@ -47,6 +47,8 @@ class RealVoiceLoop:
         *,
         idle_sleep_s: float = 0.2,
         vad: Any = None,
+        playback_margin_s: float = 1.2,
+        playback_cooldown_s: float = 2.0,
     ) -> None:
         self._orch = orchestrator
         self._pipeline = pipeline
@@ -59,6 +61,13 @@ class RealVoiceLoop:
         # 防声学反馈:真机扬声器播放 TTS 期间,麦克风会采到自己的声音 →
         # 再识别再回复 → 无限自言自语循环。播放期 + 余量内丢帧不喂 VAD。
         self._mute_until = 0.0
+        # 播放后冷却(2026-09-16 日志实锤:喇叭余音/房间混响在静音余量
+        # 结束后触发 VAD 出句 → ASR 幻觉 → 第二轮 TTS 紧跟连播,用户听感
+        # "语速太快"(11:46:04 回声"语句 1.5s" → 11:46:12 又一条 TTS)。
+        # 冷却期内 VAD 出的句直接丢弃不进 ASR,根治回声连播。
+        self._playback_margin_s = playback_margin_s
+        self._playback_cooldown_s = playback_cooldown_s
+        self._cooldown_until = 0.0
 
     # ---------- 生命周期 ----------
     def start(self) -> None:
@@ -135,6 +144,11 @@ class RealVoiceLoop:
                 seg = self._vad.push(sample_rate, chunk)
                 if seg is None:
                     continue
+                # 播放后冷却期:混响尾巴凑出的"句"直接丢弃(见 __init__ 注释)
+                if time.monotonic() < self._cooldown_until:
+                    logger.debug("[real-voice] 播放后冷却期内,丢弃疑似回声语句")
+                    self._vad.reset()
+                    continue
 
                 # 完整语句 → 跑一轮 pipeline(TTS 由 push_audio_fn 路由到真机)
                 pcm = numpy_to_pcm16_bytes(sample_rate, seg)
@@ -164,8 +178,14 @@ class RealVoiceLoop:
                 if result is not None and getattr(result, "audio_path", None):
                     play_s = _wav_seconds(result.audio_path)
                     if play_s > 0:
-                        self._mute_until = time.monotonic() + play_s + 0.4
-                        logger.debug(f"[real-voice] TTS 播放 {play_s:.1f}s,麦克风静音至 +{play_s+0.4:.1f}s")
+                        now = time.monotonic()
+                        self._mute_until = now + play_s + self._playback_margin_s
+                        self._cooldown_until = now + play_s + self._playback_cooldown_s
+                        logger.debug(
+                            f"[real-voice] TTS 播放 {play_s:.1f}s,麦克风静音至 "
+                            f"+{play_s + self._playback_margin_s:.1f}s,冷却至 "
+                            f"+{play_s + self._playback_cooldown_s:.1f}s"
+                        )
             except Exception as e:
                 logger.warning(f"[real-voice] 采音异常: {type(e).__name__}: {e}")
                 time.sleep(0.5)
@@ -207,8 +227,36 @@ def make_tts_audio_router(orchestrator_getter: Any):
         - 无线 → real_mini.media(机器人侧 daemon 播放)
     - 其余 → sim(音频驱动 wobbling 联动;浏览器侧照常播报)
     单例内做播放管线懒启动(start_playing 一次)。
+
+    有线模式首次播放时接通"说话特别动作"(2026-09-16 用户语义:只有
+    Reachy 说话时做特别动作):app 侧 local_audio 的音频 wobbler 分析
+    播放信号 → offsets 经 daemon B 控制通道合成到头部。此前从未接线,
+    说话时真机头部完全不动。
     """
     _playing_started = False
+
+    def _wire_wobbler(local_audio: Any) -> None:
+        """把 app 侧 wobbler offsets 接到 real 电机(daemon B 合成)。"""
+        try:
+            from reachy_mini.io.protocol import SetSpeechOffsetsCmd, SetWobblingCmd
+
+            orch = orchestrator_getter()
+            mini = getattr(orch, "real_mini", None) if orch else None
+            if mini is None:
+                return
+
+            def _send_offsets(offsets: Any) -> None:
+                try:
+                    mini.client.send_command(SetSpeechOffsetsCmd(offsets=list(offsets)))
+                except Exception:
+                    pass  # best-effort 装饰动作,通道断开忽略
+
+            local_audio.enable_wobbling(_send_offsets)
+            # daemon 端也要开:wobbler offsets 由 daemon 与当前 target 合成
+            mini.client.send_command(SetWobblingCmd(enabled=True))
+            logger.info("[tts-router] wired 模式 wobbler 已接通(说话头部摆动)")
+        except Exception as e:
+            logger.warning(f"[tts-router] wobbler 接通失败(说话时头部不动): {e}")
 
     def route(pcm: Any) -> None:
         nonlocal _playing_started
@@ -234,6 +282,7 @@ def make_tts_audio_router(orchestrator_getter: Any):
                 if not _playing_started:
                     local_audio.start_playing()
                     _playing_started = True
+                    _wire_wobbler(local_audio)
                 local_audio.push_audio_sample(pcm)
             elif target is not None:
                 target.media.push_audio_sample(pcm)
