@@ -51,10 +51,16 @@ class UsbEyeCamera:
       - start() 后设备未就绪 → 保留 _want_running,get_frame_jpeg 被
         拉流时按 RETRY_INTERVAL_S 节流重试探测(支持热插拔);
       - 运行中拉流持续无帧(STALE_S)→ 判定设备被拔/掉线,重启管线。
+
+    单抓帧线程(2026-09-17 P6 修复):原实现每个调用者各自阻塞拉 appsink
+    新样本,MJPEG 流与手部跟随两个消费者会互相抢帧(每样本只被取走一次)。
+    现改为唯一抓帧线程写 _last_jpeg 缓存,所有消费者读缓存(非阻塞、
+    可安全共享);MJPEG 可能收到重复帧(浏览器可容忍)。
     """
 
     RETRY_INTERVAL_S = 3.0  # 未就绪时的重探测节流
     STALE_S = 5.0           # 运行中无帧判定掉线的阈值
+    CAPTURE_HZ = 20.0       # 抓帧线程目标频率(相机实际帧率会进一步约束)
 
     def __init__(self, device: str | None = None) -> None:
         self._device = device  # None → 每次 start 时探测
@@ -65,6 +71,9 @@ class UsbEyeCamera:
         self._want_running = False  # camera_stream start() 后即使没设备也保持"想跑"
         self._retry_at = 0.0        # 下次允许重探测的 monotonic 时刻
         self._last_frame_at = 0.0   # 最近一次拉到帧的时刻
+        self._last_jpeg: bytes | None = None  # 抓帧线程写的最新帧缓存
+        self._cap_thread: threading.Thread | None = None
+        self._cap_stop = threading.Event()
 
     # ---------- camera_stream 生命周期钩子 ----------
     def start(self) -> None:
@@ -85,17 +94,29 @@ class UsbEyeCamera:
             except Exception as e:
                 logger.warning(f"[usb-eye] 打开 {device} 失败: {type(e).__name__}: {e}")
                 self._close_pipeline()
+        # 抓帧线程在锁外拉起(线程自身会按需取锁,避免持锁期间线程竞争)
+        if self._running:
+            self._ensure_capture_thread()
 
     def stop(self) -> None:
+        self._cap_stop.set()
+        if self._cap_thread is not None:
+            self._cap_thread.join(timeout=2.0)
+            self._cap_thread = None
         with self._lock:
             self._want_running = False
             self._close_pipeline()
             self._running = False
+            self._last_jpeg = None
             logger.info("[usb-eye] 已停止")
 
     # ---------- camera_stream 数据接口 ----------
     def get_frame_jpeg(self) -> bytes | None:
-        """拉最新一帧 JPEG(相机未就绪/无新帧返回 None;内置热插拔自愈)。"""
+        """读最新一帧缓存(非阻塞;相机未就绪/无新帧返回 None;内置热插拔自愈)。
+
+        语义(2026-09-17):不再直接拉 appsink(那会与其他消费者抢帧),只读
+        抓帧线程维护的缓存。缓存帧可能重复,消费者按需自行去重。
+        """
         if not self._running or self._appsink is None:
             # 自愈路径 1:start() 时设备不在 → 节流重探测(真机后插场景)
             if self._want_running and time.monotonic() >= self._retry_at:
@@ -103,25 +124,50 @@ class UsbEyeCamera:
                 logger.debug("[usb-eye] 重探测 Reachy 相机…")
                 self.start()
             return None
-        try:
-            sample = self._appsink.emit("try-pull-sample", 100_000_000)  # 100ms 超时
-            if sample is None:
-                self._maybe_restart_stale()
-                return None
-            buf = sample.get_buffer()
-            ok, map_info = buf.map(self._GST.MapFlags.READ)
-            if not ok:
-                return None
-            try:
-                self._last_frame_at = time.monotonic()
-                return bytes(map_info.data)
-            finally:
-                buf.unmap(map_info)
-        except Exception as e:
-            logger.debug(f"[usb-eye] pull 异常: {e}")
-            return None
+        return self._last_jpeg
 
     # ---------- 内部 ----------
+    def _ensure_capture_thread(self) -> None:
+        """拉起唯一抓帧线程(幂等)。"""
+        if self._cap_thread is not None and self._cap_thread.is_alive():
+            return
+        self._cap_stop.clear()
+        self._cap_thread = threading.Thread(
+            target=self._capture_loop, daemon=True, name="usb-eye-capture"
+        )
+        self._cap_thread.start()
+        logger.info(f"[usb-eye] 抓帧线程已启动({self.CAPTURE_HZ:.0f} Hz)")
+
+    def _capture_loop(self) -> None:
+        """唯一 appsink 消费者:拉帧写缓存;无帧时走掉线自愈。"""
+        while not self._cap_stop.wait(1.0 / self.CAPTURE_HZ):
+            self._pull_once()
+
+    def _pull_once(self) -> bool:
+        """从 appsink 拉一帧写缓存(供抓帧线程与测试复用)。返回是否拉到帧。"""
+        if not self._running or self._appsink is None:
+            return False
+        if not hasattr(self._appsink, "emit"):  # 测试假对象,无 GST 接口
+            return False
+        try:
+            sample = self._appsink.emit("try-pull-sample", 50_000_000)  # 50ms 超时
+        except Exception as e:
+            logger.debug(f"[usb-eye] pull 异常: {e}")
+            return False
+        if sample is None:
+            self._maybe_restart_stale()
+            return False
+        buf = sample.get_buffer()
+        ok, map_info = buf.map(self._GST.MapFlags.READ)
+        if not ok:
+            return False
+        try:
+            self._last_jpeg = bytes(map_info.data)
+            self._last_frame_at = time.monotonic()
+            return True
+        finally:
+            buf.unmap(map_info)
+
     def _maybe_restart_stale(self) -> None:
         """运行中持续无帧 → 设备可能被拔/掉线 → 节流重启管线。"""
         now = time.monotonic()
@@ -134,7 +180,7 @@ class UsbEyeCamera:
         try:
             self._close_pipeline()
             self._running = False
-            self.start()  # 重新探测设备并重开
+            self.start()  # 重新探测设备并重开(会复用/重拉抓帧线程)
         except Exception as e:
             logger.warning(f"[usb-eye] 重启管线失败: {type(e).__name__}: {e}")
 

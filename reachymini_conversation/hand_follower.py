@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +204,8 @@ class HandFollower:
         interval = 1.0 / self.poll_hz
         logger.info(f"[hand-follower] loop started, interval={interval:.3f}s")
         last_requested: bool | None = None
+        no_hand_since: float | None = None
+        last_no_hand_log = 0.0
         while not self._stop.is_set():
             try:
                 # 同步 state_bus.hand_follow_requested → enable/disable
@@ -214,7 +217,28 @@ class HandFollower:
                         self.disable()
                     last_requested = requested
 
+                had_hand = bool(self._bus.get("hand_visible"))
                 self._tick()
+
+                # 真机诊断:已开启但持续无手 → 每 5s 提示一次排查方向
+                # (2026-09-17 用户实测"一直检测不到手":根因多为取帧源不对/
+                #  未连真机/手不在镜头前,日志里要能自解释)
+                if self.enabled:
+                    if not had_hand:
+                        now = time.monotonic()
+                        if no_hand_since is None:
+                            no_hand_since = now
+                        elif now - no_hand_since >= 5.0 and now - last_no_hand_log >= 5.0:
+                            last_no_hand_log = now
+                            logger.info(
+                                "[hand-follower] 已开启但持续未检测到手 — "
+                                "确认:①顶栏已⚡连接真机 ②手在机器人镜头前 "
+                                "③光线充足;纯仿真模式的相机是合成画面,永远检测不到"
+                            )
+                    else:
+                        no_hand_since = None
+                else:
+                    no_hand_since = None
             except Exception as e:
                 logger.warning(f"[hand-follower] tick error: {e}")
             if self._stop.wait(interval):

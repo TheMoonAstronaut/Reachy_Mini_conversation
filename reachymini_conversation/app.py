@@ -115,17 +115,43 @@ class ConversationApp(ReachyMiniApp):
         )
         self._sound_localizer.start()
 
+        # V2 Fix D:真机眼睛相机(USB 直连,懒开)。提前创建 —— 手部跟随(P6)
+        # 与 MJPEG /camera_feed(§3)共用同一实例,内部单抓帧线程写缓存,
+        # 多消费者读缓存不抢帧(2026-09-17 P6 修复)。
+        from reachymini_conversation.local_camera import UsbEyeCamera
+
+        self._usb_eye = UsbEyeCamera()
+
         # 2.6 手部跟随(P6)— 默认关,UI/工具显式开
         logger.info("[P6] Initializing hand follower")
         try:
-            get_frame_fn = (
+            sim_get_frame = (
                 reachy_mini.media.get_frame_jpeg
                 if hasattr(reachy_mini, "media") and reachy_mini.media is not None
                 else None
             )
+
+            def _hand_frame_getter() -> bytes | None:
+                """取帧源:真机已连接 → 真机 USB 相机(真手在机器人镜头前);
+                否则退回 sim 眼睛相机(合成画面,纯仿真下永远检测不到手,
+                保持可用不崩)。真机相机未就绪返回 None,本轮跳过。"""
+                if self._orchestrator is not None and self._orchestrator.real_mini is not None:
+                    try:
+                        frame = self._usb_eye.get_frame_jpeg()
+                        if frame:
+                            return frame
+                    except Exception as e:
+                        logger.debug(f"[P6] 真机相机取帧失败: {e}")
+                if sim_get_frame is not None:
+                    try:
+                        return sim_get_frame()
+                    except Exception:
+                        return None
+                return None
+
             self._hand_follower = HandFollower(
                 orchestrator=self._orchestrator,
-                get_frame_jpeg_fn=get_frame_fn,
+                get_frame_jpeg_fn=_hand_frame_getter,
                 poll_hz=15.0,
             )
             self._hand_follower.start()
@@ -215,16 +241,15 @@ class ConversationApp(ReachyMiniApp):
 
             scene_receiver = SceneUdpReceiver()
 
-            # V2 Fix D:真机眼睛相机(USB 直连,懒开;没插真机就走占位图)
-            from reachymini_conversation.local_camera import UsbEyeCamera
-
+            # V2 Fix D:真机眼睛相机(USB 直连,懒开;没插真机就走占位图)。
+            # 复用 §2.5 的实例(与手部跟随共享抓帧缓存)。
             stream_app = create_camera_stream_app(
                 sim_mini=reachy_mini,
                 real_mini=None,
                 target_fps=self.target_fps,
                 scene_provider=scene_receiver,
                 static_dir=str(PROJECT_ROOT / "static"),
-                real_frame_provider=UsbEyeCamera(),
+                real_frame_provider=self._usb_eye,
             )
             stream_config = uvicorn.Config(
                 stream_app,
