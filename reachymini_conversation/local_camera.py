@@ -44,7 +44,17 @@ def find_reachy_camera() -> str | None:
 
 
 class UsbEyeCamera:
-    """Reachy 眼睛 USB 相机的直连读取(get_frame_jpeg 供 MJPEG 推流用)。"""
+    """Reachy 眼睛 USB 相机的直连读取(get_frame_jpeg 供 MJPEG 推流用)。
+
+    自愈(2026-09-16 用户实测):app 先启动、真机后插 USB 时,启动期的
+    一次性探测已错过相机 → 画面永远空白只能重启 app。为此:
+      - start() 后设备未就绪 → 保留 _want_running,get_frame_jpeg 被
+        拉流时按 RETRY_INTERVAL_S 节流重试探测(支持热插拔);
+      - 运行中拉流持续无帧(STALE_S)→ 判定设备被拔/掉线,重启管线。
+    """
+
+    RETRY_INTERVAL_S = 3.0  # 未就绪时的重探测节流
+    STALE_S = 5.0           # 运行中无帧判定掉线的阈值
 
     def __init__(self, device: str | None = None) -> None:
         self._device = device  # None → 每次 start 时探测
@@ -52,20 +62,25 @@ class UsbEyeCamera:
         self._appsink = None
         self._lock = threading.Lock()
         self._running = False
+        self._want_running = False  # camera_stream start() 后即使没设备也保持"想跑"
+        self._retry_at = 0.0        # 下次允许重探测的 monotonic 时刻
+        self._last_frame_at = 0.0   # 最近一次拉到帧的时刻
 
     # ---------- camera_stream 生命周期钩子 ----------
     def start(self) -> None:
-        """启动 GStreamer 管线(相机不在时静默失败,走占位图)。"""
+        """启动 GStreamer 管线(相机不在时保留重试意愿,走占位图)。"""
         with self._lock:
+            self._want_running = True
             if self._running:
                 return
             device = self._device or find_reachy_camera()
             if device is None:
-                logger.info("[usb-eye] 未找到 Reachy 相机(未插真机?)")
+                logger.info("[usb-eye] 未找到 Reachy 相机(未插真机?保持重试)")
                 return
             try:
                 self._open_pipeline(device)
                 self._running = True
+                self._last_frame_at = time.monotonic()
                 logger.info(f"[usb-eye] 已开 {device}(MJPEG 直出)")
             except Exception as e:
                 logger.warning(f"[usb-eye] 打开 {device} 失败: {type(e).__name__}: {e}")
@@ -73,24 +88,32 @@ class UsbEyeCamera:
 
     def stop(self) -> None:
         with self._lock:
+            self._want_running = False
             self._close_pipeline()
             self._running = False
             logger.info("[usb-eye] 已停止")
 
     # ---------- camera_stream 数据接口 ----------
     def get_frame_jpeg(self) -> bytes | None:
-        """拉最新一帧 JPEG(相机未就绪/无新帧返回 None)。"""
+        """拉最新一帧 JPEG(相机未就绪/无新帧返回 None;内置热插拔自愈)。"""
         if not self._running or self._appsink is None:
+            # 自愈路径 1:start() 时设备不在 → 节流重探测(真机后插场景)
+            if self._want_running and time.monotonic() >= self._retry_at:
+                self._retry_at = time.monotonic() + self.RETRY_INTERVAL_S
+                logger.debug("[usb-eye] 重探测 Reachy 相机…")
+                self.start()
             return None
         try:
             sample = self._appsink.emit("try-pull-sample", 100_000_000)  # 100ms 超时
             if sample is None:
+                self._maybe_restart_stale()
                 return None
             buf = sample.get_buffer()
             ok, map_info = buf.map(self._GST.MapFlags.READ)
             if not ok:
                 return None
             try:
+                self._last_frame_at = time.monotonic()
                 return bytes(map_info.data)
             finally:
                 buf.unmap(map_info)
@@ -99,6 +122,22 @@ class UsbEyeCamera:
             return None
 
     # ---------- 内部 ----------
+    def _maybe_restart_stale(self) -> None:
+        """运行中持续无帧 → 设备可能被拔/掉线 → 节流重启管线。"""
+        now = time.monotonic()
+        if now - self._last_frame_at < self.STALE_S:
+            return
+        if now < self._retry_at:
+            return
+        self._retry_at = now + self.RETRY_INTERVAL_S
+        logger.warning("[usb-eye] 持续无帧,判定掉线,重启管线")
+        try:
+            self._close_pipeline()
+            self._running = False
+            self.start()  # 重新探测设备并重开
+        except Exception as e:
+            logger.warning(f"[usb-eye] 重启管线失败: {type(e).__name__}: {e}")
+
     def _open_pipeline(self, device: str) -> None:
         import gi
 
