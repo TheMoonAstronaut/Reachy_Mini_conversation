@@ -107,6 +107,26 @@ if ! python -c "import reachymini_conversation" 2>/dev/null && ! python -c "impo
     pip install -e . >/dev/null
 fi
 
+# ---------- 真机声卡音量恢复(易失设置,重启即丢,每次启动拉满) ----------
+# 2026-09-16 实测:"声音非常偏小"根因是 ALSA 'PCM',0 输出主音量被砍到
+# -33dB(45%)。Seeed wiki 建议:所有控件保持 100%(PCM 输出可按需调)。
+# 注意:按名字探测 card 号(USB 重枚举后 card N 可能变化);只动
+#       Reachy Mini Audio 卡,不碰板载声卡;未接真机时静默跳过。
+# 另:pactl 默认输入源(板载活麦)也是运行时改动,暂未持久化,见 HANDOVER §三.1。
+setup_reachy_audio() {
+    local card
+    card="$(aplay -l 2>/dev/null | sed -n 's/^card \([0-9]\+\):.*Reachy Mini Audio.*/\1/p' | head -1)"
+    if [[ -z "$card" ]]; then
+        return 0  # 未接真机(pure_sim),静默跳过
+    fi
+    local ctl
+    for ctl in "PCM,0" "PCM,1" "Headset,0" "Headset,1"; do
+        amixer -c "$card" sset "$ctl" 100% >/dev/null 2>&1 || true
+    done
+    log "Reachy Mini Audio(card $card)音量控件已设为 100%(易失设置,每次启动恢复)"
+}
+setup_reachy_audio
+
 # ---------- 启动 daemon ----------
 # P7.B:媒体链路已修好(unixfd backport 插件 + SDK media_server 降级补丁),
 # 默认带媒体启动;--no-media 仅作降级排障用。
