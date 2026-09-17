@@ -17,6 +17,16 @@
   - 跟随生效(开关开 + 检测到手)时空闲呼吸不新起段 —— 头部归跟随;
   - 与声源跟随同开时无互斥(两者皆默认关),UI 文案提示勿同开。
 
+头部驱动(2026-09-17 重构):不用 SDK look_at_image,改为
+"像素偏移 → yaw/pitch 线性映射 → MirrorOrchestrator.goto_target(天然镜像
+sim + real)"。原因(对比官方实现后的结论):
+  - 有线模式 daemon B 以 --no-media 运行 → 真机 SDK look_at_image 必抛
+    "Camera is not initialized"(它要求 daemon 相机就绪);
+  - look_at_image 内部 assert u/v 在"daemon 那路相机"的分辨率内 —— 我们
+    的帧来自 4K USB 相机,坐标喂给 sim(低分辨率)会 assert 越界;
+  - 手部跟随不需要精确内参(官方亦无 Reachy Mini 手部跟随参考实现,
+    pollen-robotics 下无此仓库),归一化偏移 + 可调增益是社区通用做法。
+
 模型下载(用户首次使用):
   - https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
   - 保存到 ~/.cache/reachymini/hand_landmarker.task(或环境变量指定)
@@ -68,6 +78,10 @@ class HandFollower:
         duration: float = 0.3,
         smooth_alpha: float = 0.35,   # u/v EMA 平滑系数(越小越稳,越大越跟手)
         deadband_px: int = 10,        # 死区:平滑目标与上次发送差 < 该值不发送(防抖)
+        gaze_gain_yaw_deg: float = 25.0,   # 归一化偏移 x∈[-1,1] → yaw 增益(度)
+        gaze_gain_pitch_deg: float = 18.0, # 归一化偏移 y∈[-1,1] → pitch 增益(度)
+        yaw_limit_deg: float = 35.0,       # 偏航安全限位
+        pitch_limit_deg: float = 25.0,     # 俯仰安全限位
     ) -> None:
         self.orchestrator = orchestrator
         self.get_frame_jpeg_fn = get_frame_jpeg_fn
@@ -77,6 +91,10 @@ class HandFollower:
         self.duration = duration
         self.smooth_alpha = min(max(smooth_alpha, 0.05), 1.0)
         self.deadband_px = max(int(deadband_px), 0)
+        self.gaze_gain_yaw_deg = float(gaze_gain_yaw_deg)
+        self.gaze_gain_pitch_deg = float(gaze_gain_pitch_deg)
+        self.yaw_limit_deg = abs(float(yaw_limit_deg))
+        self.pitch_limit_deg = abs(float(pitch_limit_deg))
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -87,6 +105,8 @@ class HandFollower:
         self._smooth_u: float | None = None
         self._smooth_v: float | None = None
         self._last_sent: tuple[int, int] | None = None
+        # 无手时的画面亮度诊断(4K 帧 arr.mean(),仅在手消失时算一次)
+        self._last_brightness: float | None = None
 
         self._landmarker: Any | None = None
         self._available: bool = False
@@ -230,10 +250,17 @@ class HandFollower:
                             no_hand_since = now
                         elif now - no_hand_since >= 5.0 and now - last_no_hand_log >= 5.0:
                             last_no_hand_log = now
+                            dark_hint = ""
+                            b = self._last_brightness
+                            if b is not None and b < 45.0:
+                                dark_hint = (
+                                    f";画面偏暗(亮度 {b:.0f}/255)——补光或检查镜头遮挡"
+                                )
                             logger.info(
                                 "[hand-follower] 已开启但持续未检测到手 — "
-                                "确认:①顶栏已⚡连接真机 ②手在机器人镜头前 "
-                                "③光线充足;纯仿真模式的相机是合成画面,永远检测不到"
+                                "确认:①顶栏已⚡连接真机(纯仿真/无线模式的画面"
+                                "里没有真手)②手在机器人镜头前 ③光线充足"
+                                f"{dark_hint}"
                             )
                     else:
                         no_hand_since = None
@@ -291,6 +318,11 @@ class HandFollower:
         # 5. 解析结果
         if not result.hand_landmarks:
             self._bus.update("hand_visible", False)
+            # 亮度诊断:检测不到手时记录画面亮度(供"开启但无手"日志提示补光)
+            try:
+                self._last_brightness = float(arr.mean())
+            except Exception:
+                pass
             return
 
         landmarks = result.hand_landmarks[0]  # 取第一只手
@@ -323,9 +355,31 @@ class HandFollower:
                 return  # 死区内:不发送,减少关节指令抖动
         self._last_sent = (su, sv)
 
-        # 6. look_at_image(sim + real)
+        # 6. 驱动头部:像素偏移 → yaw/pitch 线性映射 → goto_target(sim+real 镜像)
+        #    不用 SDK look_at_image(有线 daemon --no-media 必抛 Camera not
+        #    initialized;且其分辨率 assert 与 4K USB 帧坐标不兼容)。见模块 docstring。
         if self.orchestrator is None:
             return
+        nx = (su - w * 0.5) / (w * 0.5)   # -1..1(图像中心为 0)
+        ny = (sv - h * 0.5) / (h * 0.5)   # -1..1(v 向下为正)
+        yaw_deg = max(
+            -self.yaw_limit_deg,
+            min(self.yaw_limit_deg, nx * self.gaze_gain_yaw_deg),
+        )
+        pitch_deg = max(
+            -self.pitch_limit_deg,
+            min(self.pitch_limit_deg, -ny * self.gaze_gain_pitch_deg),
+        )
+        try:
+            from reachy_mini.utils import create_head_pose
+
+            head_pose = create_head_pose(
+                x=0, y=0, z=0, roll=0, pitch=pitch_deg, yaw=yaw_deg, degrees=True
+            )
+        except Exception as e:
+            logger.debug(f"[hand-follower] 构建头部姿态失败: {e}")
+            return
+
         try:
             import asyncio
 
@@ -333,12 +387,22 @@ class HandFollower:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     asyncio.run_coroutine_threadsafe(
-                        self.orchestrator.look_at_image(su, sv, self.duration),
+                        self.orchestrator.goto_target(
+                            head=head_pose, duration=self.duration
+                        ),
                         loop,
                     )
                 else:
-                    asyncio.run(self.orchestrator.look_at_image(su, sv, self.duration))
+                    asyncio.run(
+                        self.orchestrator.goto_target(
+                            head=head_pose, duration=self.duration
+                        )
+                    )
             except RuntimeError:
-                asyncio.run(self.orchestrator.look_at_image(su, sv, self.duration))
+                asyncio.run(
+                    self.orchestrator.goto_target(
+                        head=head_pose, duration=self.duration
+                    )
+                )
         except Exception as e:
-            logger.debug(f"[hand-follower] look_at_image failed: {e}")
+            logger.debug(f"[hand-follower] goto_target failed: {e}")

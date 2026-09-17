@@ -194,10 +194,10 @@ def test_hand_follower_state_bus_request_toggles():
 
 
 # ============================================================================
-# 端到端 mock:HandLandmarker 模拟 + look_at_image 验证
+# 端到端 mock:HandLandmarker 模拟 + goto_target(yaw/pitch 映射)验证
 # ============================================================================
 def test_hand_follower_tick_with_mock_landmarker(tmp_path):
-    """End-to-end:mock HandLandmarker 检测到手 → look_at_image 被调。"""
+    """End-to-end:mock HandLandmarker 检测到手 → goto_target 被调(yaw/pitch)。"""
     from reachymini_conversation.hand_follower import HandFollower
     from reachymini_conversation.state_bus import get_state_bus, reset_state_bus
 
@@ -262,13 +262,13 @@ def test_hand_follower_tick_with_mock_landmarker(tmp_path):
         mp.tasks.vision.HandLandmarker = FakeHandLandmarker
 
         orch = MagicMock()
-        # orch.look_at_image 是 async
+        # orch.goto_target 是 async(head=pose, duration=...)
         captured_calls = []
 
-        async def fake_look_at_image(u, v, duration):
-            captured_calls.append((u, v, duration))
+        async def fake_goto_target(**kwargs):
+            captured_calls.append(kwargs)
 
-        orch.look_at_image.side_effect = fake_look_at_image
+        orch.goto_target.side_effect = fake_goto_target
 
         hf = HandFollower(
             orchestrator=orch,
@@ -289,16 +289,21 @@ def test_hand_follower_tick_with_mock_landmarker(tmp_path):
         # 跑 _tick 一次(同步)
         hf._tick()
 
-        # 应该 look_at_image 被调
-        assert len(captured_calls) >= 1, f"expected look_at_image call, got {captured_calls}"
-        u, v, duration = captured_calls[0]
-        assert duration == 0.3
+        # goto_target 应被调,duration 透传
+        assert len(captured_calls) >= 1, f"expected goto_target call, got {captured_calls}"
+        assert captured_calls[0]["duration"] == 0.3
+        head_pose = captured_calls[0]["head"]
+        # 手部在 (0.5, 0.4) 归一化位置 → 中心偏上 → yaw=0,pitch>0(抬头)
+        import numpy as np
+
+        pose = np.asarray(head_pose)
+        assert pose.shape == (4, 4)
+
+        # state_bus 更新(hand_uv 是原始像素)
+        assert bus.get("hand_visible") is True
+        u, v = bus.get("hand_uv")
         assert 0 <= u <= 640
         assert 0 <= v <= 480
-
-        # state_bus 更新
-        assert bus.get("hand_visible") is True
-        assert bus.get("hand_uv") == [u, v]
     finally:
         PIL.Image.open = orig_open
         mp.tasks.vision.HandLandmarker = orig_lm
@@ -321,8 +326,8 @@ def test_hand_follower_no_frame_skips_gracefully():
 
     hf.enable()
     hf._tick()  # 不应崩
-    # orch.look_at_image 不应被调
-    hf.orchestrator.look_at_image.assert_not_called()
+    # orch.goto_target 不应被调
+    hf.orchestrator.goto_target.assert_not_called()
 
 
 # ============================================================================
@@ -387,6 +392,30 @@ def _patch_pil():
     return PIL.Image, PIL.Image.open
 
 
+def _record_gaze_calls(orch):
+    """把 orch.goto_target 换成记录 (pitch, yaw) 的假实现(经 create_head_pose 捕获)。"""
+    import reachy_mini.utils as rm_utils
+
+    recorded: list[tuple[float, float]] = []
+    orig_chp = rm_utils.create_head_pose
+
+    def fake_chp(x, y, z, roll, pitch, yaw, degrees=True):
+        recorded.append((pitch, yaw))
+        return orig_chp(x, y, z, roll, pitch, yaw, degrees=degrees)
+
+    rm_utils.create_head_pose = fake_chp
+
+    async def fake_goto_target(**kwargs):
+        pass
+
+    orch.goto_target.side_effect = fake_goto_target
+
+    def restore():
+        rm_utils.create_head_pose = orig_chp
+
+    return recorded, restore
+
+
 def test_tick_yields_while_speaking():
     """播报(status=speaking/playing)时不驱动头部,但检测状态照常更新。"""
     import PIL.Image
@@ -396,13 +425,8 @@ def test_tick_yields_while_speaking():
     reset_state_bus()
     bus = get_state_bus()
 
-    captured = []
-
-    async def fake_look(u, v, duration):
-        captured.append((u, v))
-
     orch = MagicMock()
-    orch.look_at_image.side_effect = fake_look
+    recorded, restore = _record_gaze_calls(orch)
 
     orig_open = PIL.Image.open
     PIL.Image.open = _FakePILImage
@@ -410,14 +434,15 @@ def test_tick_yields_while_speaking():
         hf = _make_ready_follower(orch, lm=_FakeLandmark(0.5, 0.4))
         bus.update("status", "speaking")
         hf._tick()
-        assert captured == [], "speaking 期不允许驱动头部(wobbler 优先)"
+        assert recorded == [], "speaking 期不允许驱动头部(wobbler 优先)"
         assert bus.get("hand_visible") is True, "检测状态仍应更新(徽章实时)"
 
         bus.update("status", "idle")
         hf._tick()
-        assert len(captured) == 1, "播报结束后跟随应恢复驱动"
+        assert len(recorded) == 1, "播报结束后跟随应恢复驱动"
     finally:
         PIL.Image.open = orig_open
+        restore()
 
 
 def test_tick_deadband_suppresses_micro_motion():
@@ -428,13 +453,8 @@ def test_tick_deadband_suppresses_micro_motion():
 
     reset_state_bus()
 
-    captured = []
-
-    async def fake_look(u, v, duration):
-        captured.append((u, v))
-
     orch = MagicMock()
-    orch.look_at_image.side_effect = fake_look
+    recorded, restore = _record_gaze_calls(orch)
 
     orig_open = PIL.Image.open
     PIL.Image.open = _FakePILImage
@@ -442,22 +462,23 @@ def test_tick_deadband_suppresses_micro_motion():
         hf = _make_ready_follower(
             orch, lm=_FakeLandmark(0.5, 0.5), deadband_px=10, smooth_alpha=0.5
         )
-        hf._tick()  # 首帧:初始化 EMA 并发送 (320, 240)
-        assert len(captured) == 1
+        hf._tick()  # 首帧:初始化 EMA 并发送(yaw=0)
+        assert len(recorded) == 1
 
         # 检测值小幅漂移(2px 级):EMA 后 < deadband → 不再发
         hf._landmarker.lm = _FakeLandmark(0.503, 0.5)
         for _ in range(5):
             hf._tick()
-        assert len(captured) == 1, f"微动不应重复发送: {captured}"
+        assert len(recorded) == 1, f"微动不应重复发送: {recorded}"
 
-        # 大幅跳变:超过死区 → 发送新目标
+        # 大幅跳变:超过死区 → 发送新目标(手在图像右侧 → yaw>0)
         hf._landmarker.lm = _FakeLandmark(0.8, 0.5)
         hf._tick()
-        assert len(captured) == 2
-        assert captured[1][0] > captured[0][0]
+        assert len(recorded) == 2
+        assert recorded[1][1] > recorded[0][1], "右侧的手应产生正 yaw"
     finally:
         PIL.Image.open = orig_open
+        restore()
 
 
 def test_ema_smoothing_lags_behind_detection():
@@ -468,13 +489,8 @@ def test_ema_smoothing_lags_behind_detection():
 
     reset_state_bus()
 
-    captured = []
-
-    async def fake_look(u, v, duration):
-        captured.append((u, v))
-
     orch = MagicMock()
-    orch.look_at_image.side_effect = fake_look
+    recorded, restore = _record_gaze_calls(orch)
 
     orig_open = PIL.Image.open
     PIL.Image.open = _FakePILImage
@@ -482,13 +498,15 @@ def test_ema_smoothing_lags_behind_detection():
         hf = _make_ready_follower(
             orch, lm=_FakeLandmark(0.5, 0.5), smooth_alpha=0.25, deadband_px=0
         )
-        hf._tick()  # EMA 初始化 = 检测值 (320,240)
+        hf._tick()  # EMA 初始化 = 检测值 (320,240) → yaw=0
         hf._landmarker.lm = _FakeLandmark(0.9, 0.5)  # 检测跳到 576
         hf._tick()
-        # EMA = 0.25*576 + 0.75*320 = 384(而非直接 576)
-        assert captured[-1][0] == 384
+        # EMA su = 0.25*576 + 0.75*320 = 384 → nx=(384-320)/320=0.2
+        # yaw = 0.2 * gaze_gain_yaw_deg(25) = 5.0(而非直接跳 0.8*25=20)
+        assert recorded[-1][1] == 5.0
     finally:
         PIL.Image.open = orig_open
+        restore()
 
 
 def test_disable_resets_smoothing_state():
@@ -499,27 +517,23 @@ def test_disable_resets_smoothing_state():
 
     reset_state_bus()
 
-    captured = []
-
-    async def fake_look(u, v, duration):
-        captured.append((u, v))
-
     orch = MagicMock()
-    orch.look_at_image.side_effect = fake_look
+    recorded, restore = _record_gaze_calls(orch)
 
     orig_open = PIL.Image.open
     PIL.Image.open = _FakePILImage
     try:
         hf = _make_ready_follower(orch, lm=_FakeLandmark(0.9, 0.5), deadband_px=0)
         hf._tick()
-        assert captured[-1][0] == int(0.9 * 640)
+        assert recorded[-1][1] == 20.0  # nx=0.8 → 0.8*25
 
         hf.disable()
         assert hf._smooth_u is None and hf._last_sent is None
 
         hf.enable()
         hf._landmarker.lm = _FakeLandmark(0.1, 0.5)
-        hf._tick()  # EMA 重新初始化 → 直接等于新检测值
-        assert captured[-1][0] == int(0.1 * 640)
+        hf._tick()  # EMA 重新初始化 → 直接等于新检测值(nx=-0.8 → yaw=-20)
+        assert recorded[-1][1] == -20.0
     finally:
         PIL.Image.open = orig_open
+        restore()
