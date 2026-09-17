@@ -77,11 +77,15 @@ class EdgeTTS:
 
     @staticmethod
     def _normalize_loudness(path: str) -> None:
-        """ffmpeg loudnorm 响度归一化(I=-14 LUFS / TP=-1.5dB);失败保留原文件。
+        """ffmpeg loudnorm 响度归一化(I=-10 LUFS / TP=-1.5dB);失败保留原文件。
 
-        背景(2026-09-16 实测):Edge TTS 原始输出 mean_volume≈-21dB、
-        max≈-5.4dB,真机扬声器(alsa 已 0dB)和浏览器播放都明显偏小,
-        用户反馈"几乎听不到"。loudnorm 单程模式对语音播报足够。
+        背景(2026-09-16 实测):Edge TTS 原始输出 mean_volume≈-21dB,
+        真机扬声器物理音量小 + SDK 官方 EQ 在语音频段削 4~13dB
+        (DEFAULT_SPEAKER_EQ_GAINS 负增益段),用户实测"几乎听不到"。
+        I=-14(播客级)仍偏小,提到 I=-10(响口播级)再 +4dB。
+        注意:不能用 edge-tts --volume 提升 —— loudnorm 以测量响度为目标,
+        会把合成层的增益归一化抵消掉,必须直接调 loudnorm 目标。
+        loudnorm 单程模式对语音播报足够。
 
         注意:edge-tts 输出实为 MP3(虽以 .wav 命名),ffmpeg 按内容探测
         输入格式;输出临时文件显式 libmp3lame 编码,再原子替换回原路径
@@ -97,7 +101,7 @@ class EdgeTTS:
         cmd = [
             "ffmpeg", "-y", "-v", "error",
             "-i", path,
-            "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+            "-af", "loudnorm=I=-10:TP=-1.5:LRA=11",
             # loudnorm 会把采样率升到 48k/192k;edge-tts 原生 24kHz。
             # 采样率漂移会让播放端变速(真机管线固定 16k 解释,见 play()),
             # 必须钉回 24k。
@@ -152,9 +156,22 @@ class EdgeTTS:
                 data = signal.resample_poly(
                     data, 16000 // g, int(samplerate) // g
                 ).astype(np.float32)
+            # 声道:SDK 播放 appsrc caps 固定 stereo(interleaved F32LE,
+            # SDK audio_gstreamer.py:373 channels=2;base 的 PTS 时长计算
+            # audio_base.py:149 用 data.shape[0] 当帧数)。
+            # mono 直接 push 会被按 stereo 解释成一半帧数 → 2 倍速,
+            # 且左右声道内容是 mono 的交错切片 → 纯混叠噪声
+            # (2026-09-16 实测用户反馈"语速太快听不清",即此根因)。
+            # (N,) → (N,2) 左右同值:C-order 字节序即 L0,R0,L1,R1,... 与
+            # caps 的 interleaved 布局匹配,shape[0]=帧数让 PTS 归正。
+            if data.ndim == 1:
+                data = np.stack([data, data], axis=1)
             # 限幅(避免 clipping)
             data = np.clip(data, -1.0, 1.0).astype(np.float32)
             await asyncio.to_thread(push_audio_sample_fn, data)
-            logger.debug(f"[TTS] Played {len(data)} samples @ 16000Hz(源 {samplerate}Hz)")
+            logger.debug(
+                f"[TTS] Played {data.shape[0]} frames x {data.shape[1]}ch "
+                f"@16000Hz(源 {samplerate}Hz)"
+            )
         except Exception as e:
             logger.warning(f"[TTS] play failed: {type(e).__name__}: {e}")

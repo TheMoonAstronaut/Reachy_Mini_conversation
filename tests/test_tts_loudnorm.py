@@ -138,3 +138,84 @@ class TestPlayResample:
         asyncio.run(EdgeTTS.play(str(wav), lambda d: pushed.append(d)))
 
         assert len(pushed[0]) == 8000
+
+
+def _make_stereo_wav(path: Path, sr: int = 16000, seconds: float = 0.5) -> None:
+    """立体声 16k wav(两通道不同波形,便于验证 mono 化)。"""
+    import wave
+
+    t = np.arange(int(sr * seconds)) / sr
+    left = (np.sin(2 * np.pi * 440 * t) * 0.4 * 32767).astype("<i2")
+    right = (np.sin(2 * np.pi * 880 * t) * 0.4 * 32767).astype("<i2")
+    interleaved = np.empty(2 * len(left), dtype="<i2")
+    interleaved[0::2] = left
+    interleaved[1::2] = right
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(interleaved.tobytes())
+
+
+class TestPlayChannelLayout:
+    """声道 bug 回归(2026-09-16):SDK 播放 appsrc caps 固定
+    stereo(interleaved F32LE, audio_gstreamer.py:373 channels=2),
+    base 的 PTS 时长计算(audio_base.py:149)用 data.shape[0] 当帧数。
+    mono push 会被按 stereo 解释成一半帧数 → 2 倍速混叠噪声
+    (实测用户反馈"语速太快听不清")。
+    因此 play() 必须 push (N,2) 形状:shape[0]=帧数(PTS 正确),
+    C-order 字节序即 L,R,L,R,... 与 caps interleaved 匹配。"""
+
+    def test_mono_expanded_to_stereo(self, tmp_path: Path) -> None:
+        import asyncio
+
+        wav = tmp_path / "m16k.wav"
+        _make_wav_at_rate(wav, 16000, seconds=0.5)
+        pushed: list = []
+
+        asyncio.run(EdgeTTS.play(str(wav), lambda d: pushed.append(d)))
+
+        assert pushed[0].ndim == 2, "push 必须是 (N,2) 立体声"
+        assert pushed[0].shape == (8000, 2), f"形状应为 (8000,2), 实际 {pushed[0].shape}"
+        # 左右同值(mono 双声道化)
+        assert np.allclose(pushed[0][:, 0], pushed[0][:, 1])
+
+    def test_interleaved_byte_order(self, tmp_path: Path) -> None:
+        """字节级证据:(N,2) C-order tobytes == 手算 L,R,L,R,... interleaved。"""
+        import asyncio
+
+        wav = tmp_path / "m16k.wav"
+        _make_wav_at_rate(wav, 16000, seconds=0.25)
+        pushed: list = []
+
+        asyncio.run(EdgeTTS.play(str(wav), lambda d: pushed.append(d)))
+
+        mono = pushed[0][:, 0]
+        expected = np.stack([mono, mono], axis=1).tobytes()
+        assert pushed[0].tobytes() == expected, "字节序必须与 caps interleaved 布局一致"
+
+    def test_24k_mono_stereo_layout(self, tmp_path: Path) -> None:
+        """24k 重采样后同样要 stereo(修复前只修采样率、漏声道,听感 2 倍速)。"""
+        import asyncio
+
+        wav = tmp_path / "a24k.wav"
+        _make_wav_at_rate(wav, 24000, seconds=0.5)
+        pushed: list = []
+
+        asyncio.run(EdgeTTS.play(str(wav), lambda d: pushed.append(d)))
+
+        assert pushed[0].shape[1] == 2, f"24k 源 push 后必须是 stereo, 实际 {pushed[0].shape}"
+        assert abs(pushed[0].shape[0] - 8000) <= 80
+
+    def test_stereo_source_dual_channel_preserved(self, tmp_path: Path) -> None:
+        """立体声源:先 mono 化再双声道化,push 仍是 (N,2)。"""
+        import asyncio
+
+        wav = tmp_path / "s16k.wav"
+        _make_stereo_wav(wav, 16000, seconds=0.5)
+        pushed: list = []
+
+        asyncio.run(EdgeTTS.play(str(wav), lambda d: pushed.append(d)))
+
+        assert pushed[0].ndim == 2 and pushed[0].shape[1] == 2
+        assert pushed[0].shape[0] == 8000
