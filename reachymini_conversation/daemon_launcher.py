@@ -174,9 +174,72 @@ def patch_mujoco_backend(mj_backend_module=None) -> None:
     )
 
 
+_PATCH_AUDIO_FLAG = "_reachy_conv_audio_sink_patched"
+
+
+def patch_sim_audio_sink(media_modules=None) -> None:
+    """sim daemon 的播放 sink 固定走 PC 默认输出(不动 SDK 文件,幂等)。
+
+    背景(2026-09-16 用户实测 bug):USB 连着真机时,sim 模式的 TTS 回答
+    从真机喇叭出来(期望电脑音箱)。根因:SDK 按名字 "Reachy Mini Audio"
+    匹配声卡做 Sink(device_detection.DEFAULT_AUDIO_TARGET)——该假设是
+    "有卡=机器人场景",与本项目 sim 语义(PC 仿真、声音从电脑出)冲突。
+
+    修复:monkey-patch 所有 from-import 了 get_audio_device 的模块
+    (audio_base / audio_gstreamer / media_server;device_detection 本体
+    也一并替换,防其他调用方),Sink 查询返回 None → SDK 回落
+    autoaudiosink(PulseAudio 默认输出=电脑音箱),同时官方扬声器 EQ
+    (为 Reachy 喇叭校准)也被跳过;Source 保持原名匹配(sim 下真机麦
+    采集无人消费,无害;real 模式媒体在 daemon B --no-media,与本进程无关)。
+    只影响本 daemon 进程。
+    """
+    if media_modules is None:
+        import importlib
+
+        media_modules = []
+        for name in (
+            "reachy_mini.media.device_detection",
+            "reachy_mini.media.audio_base",
+            "reachy_mini.media.audio_gstreamer",
+            "reachy_mini.media.media_server",
+        ):
+            try:
+                media_modules.append(importlib.import_module(name))
+            except Exception:
+                pass  # 个别模块在缺插件的平台 import 失败,跳过
+
+    patched_any = False
+    for mod in media_modules:
+        orig = getattr(mod, "get_audio_device", None)
+        if orig is None or getattr(orig, _PATCH_AUDIO_FLAG, False):
+            continue
+
+        def _make_wrapper(orig_fn):
+            def _get_audio_device(device_type: str = "Source"):
+                if device_type == "Sink":
+                    logger.info(
+                        "[daemon-launcher] sim 模式:播放 sink 走 PC 默认输出"
+                        "(跳过 Reachy Mini Audio 卡匹配)"
+                    )
+                    return None
+                return orig_fn(device_type)
+
+            setattr(_get_audio_device, _PATCH_AUDIO_FLAG, True)
+            return _get_audio_device
+
+        mod.get_audio_device = _make_wrapper(orig)
+        patched_any = True
+    if patched_any:
+        logger.info(
+            "[daemon-launcher] sim 音频 sink 已 patch:Sink → PC 默认输出"
+            "(EQ 随之跳过)"
+        )
+
+
 def main() -> None:
     """launcher 入口:先 patch,再原样调 SDK daemon main()(argparse 全透传)。"""
     patch_mujoco_backend()
+    patch_sim_audio_sink()
 
     # patch 完成后再 import SDK daemon 入口并执行;sys.argv 原样透传,
     # --sim/--headless/--no-media/--scene 等全部由 SDK 自己的 argparse 解析。

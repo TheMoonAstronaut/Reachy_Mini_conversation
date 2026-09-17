@@ -201,3 +201,43 @@ def test_rendering_thread_exception_does_not_crash_daemon():
             target = call.kwargs.get("target") or call.args[0]
             target()  # 不应抛异常
     assert backend.run_calls == 1
+
+
+# ---------- sim 音频 sink patch(USB 真机插着时 sim 声音走电脑音箱) ----------
+
+
+class _FakeMediaModule:
+    """假媒体模块:有 SDK 同名的 get_audio_device(记录调用)。"""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def get_audio_device(self, device_type: str = "Source"):
+        self.calls.append(device_type)
+        return "usb-reachy-card-id"  # 模拟 SDK 找到真机声卡
+
+
+def test_audio_sink_patch_routes_sink_to_default_output():
+    """核心 guard:patch 后 Sink 查询必须返回 None(SDK 回落 autoaudiosink)。
+
+    回归(2026-09-16 用户实测):USB 连真机时 sim 模式 TTS 从真机喇叭出来。
+    根因是 SDK 按名字匹配 "Reachy Mini Audio" 做 Sink。
+    """
+    mod = _FakeMediaModule()
+    daemon_launcher.patch_sim_audio_sink([mod])
+
+    assert mod.get_audio_device("Sink") is None, (
+        "patch 后 Sink 不得再命中真机声卡(sim 声音必须走 PC 默认输出)"
+    )
+    assert mod.get_audio_device("Source") == "usb-reachy-card-id", (
+        "Source 必须透传原名匹配(不得影响真机麦采集)"
+    )
+
+
+def test_audio_sink_patch_is_idempotent():
+    """重复 patch 不叠包:Source 透传仍指原函数,Sink 仍返回 None。"""
+    mod = _FakeMediaModule()
+    daemon_launcher.patch_sim_audio_sink([mod])
+    first = mod.get_audio_device
+    daemon_launcher.patch_sim_audio_sink([mod])
+    assert mod.get_audio_device is first, "patch 叠包:第二次应直接跳过"
