@@ -422,6 +422,17 @@ def build_ui() -> gr.Blocks:
                 min_width=190,
                 elem_classes=["rm-mode-dropdown"],
             )
+            # 真机连接/断开快捷按钮(2026-09-16 用户需求:网页先切真机模式、
+            # 后插 USB 时需要反复切换才能连上;给显式重连/断开入口,
+            # 复用下拉同一 switch 通路)
+            connect_real_btn = gr.Button(
+                "⚡ 连接真机", size="sm", min_width=110,
+                elem_classes=["rm-mode-btn"],
+            )
+            disconnect_real_btn = gr.Button(
+                "✕ 断开真机", size="sm", min_width=110,
+                elem_classes=["rm-mode-btn"],
+            )
         # V2:模式切换的结果提示(切真机的进度/失败原因),紧贴状态栏下方
         mode_switch_status = gr.Markdown(value="", elem_classes=["rm-hint"])
 
@@ -506,13 +517,15 @@ def build_ui() -> gr.Blocks:
                     )
                     tts_player = gr.Audio(
                         label="🔊 Reachy 语音播报",
-                        autoplay=True,
+                        # P0-1:自动播报统一走 WebAudio(tts_autoplay.js,sim 模式
+                        # should_play=True);本组件 autoplay 必须为 False —— 否则
+                        # real 模式真机 push 播放的同时浏览器 <audio autoplay>
+                        # 也响,同一回答播两次(2026-09-16 用户实测双播 bug)。
+                        autoplay=False,
                         interactive=False,
                         elem_classes=["rm-tts"],
                     )
-                # P0-1:WebAudio 自动播放(<audio autoplay> 被浏览器策略拦截,
-                # 改走 AudioContext 一次性解锁 + 轮询 7861 /api/tts_*)。
-                # tts_player 保留作手动重播回退;本组件是自动播报通道。
+                # tts_player 仅作手动重播回退;自动播报通道是 WebAudio 轮询。
                 gr.HTML(
                     value=_TTS_AUTOPLAY_HTML,
                     js_on_load=_TTS_AUTOPLAY_JS_ON_LOAD,
@@ -758,8 +771,8 @@ def build_ui() -> gr.Blocks:
         )
 
         # ---------- 事件绑定 ----------
-        # V2:运行模式下拉切换(阻塞切换放后台线程,UI 不卡)
-        async def on_mode_change(choice: str) -> dict:
+        # V2:运行模式切换(阻塞切换放后台线程,UI 不卡);下拉与连接/断开按钮复用
+        async def _do_mode_switch(choice: str) -> dict:
             import asyncio
 
             from reachymini_conversation.mode_manager import get_mode_manager
@@ -776,6 +789,10 @@ def build_ui() -> gr.Blocks:
                 return {
                     voice_mic: gr.update(visible=voice and final_run_mode == "pure_sim"),
                     real_voice_hint: gr.update(visible=voice and final_run_mode != "pure_sim"),
+                    # 切换结果同步回下拉显示(防状态与下拉不一致)
+                    mode_dropdown: gr.update(
+                        value=_run_mode_to_choice(final_run_mode)
+                    ),
                 }
 
             if target_mode == mm.current_mode:
@@ -784,7 +801,7 @@ def build_ui() -> gr.Blocks:
             try:
                 result = await asyncio.to_thread(mm.switch_to, target_mode, conn_cfg)
             except Exception as e:
-                logger.exception("[on_mode_change] switch_to 异常")
+                logger.exception("[_do_mode_switch] switch_to 异常")
                 bus_now.update("real_connecting", False)
                 return {
                     mode_switch_status: f"❌ 切换异常:{type(e).__name__}: {e}",
@@ -797,10 +814,29 @@ def build_ui() -> gr.Blocks:
                 **_vis("pure_sim"),
             }
 
+        async def on_mode_change(choice: str) -> dict:
+            return await _do_mode_switch(choice)
+
+        async def on_connect_real() -> dict:
+            """显式连接真机(同下拉选"真机+仿真(有线)",USB 后插时按此重连)。"""
+            return await _do_mode_switch(_RUN_MODE_REAL_WIRED)
+
+        async def on_disconnect_real() -> dict:
+            """显式断开真机(同下拉选"纯仿真")。"""
+            return await _do_mode_switch(_RUN_MODE_PURE_SIM)
+
         mode_dropdown.change(
             on_mode_change,
             inputs=[mode_dropdown],
-            outputs=[mode_switch_status, voice_mic, real_voice_hint],
+            outputs=[mode_switch_status, voice_mic, real_voice_hint, mode_dropdown],
+        )
+        connect_real_btn.click(
+            on_connect_real,
+            outputs=[mode_switch_status, voice_mic, real_voice_hint, mode_dropdown],
+        )
+        disconnect_real_btn.click(
+            on_disconnect_real,
+            outputs=[mode_switch_status, voice_mic, real_voice_hint, mode_dropdown],
         )
 
         def _build_tool_deps() -> Any:
@@ -851,6 +887,10 @@ def build_ui() -> gr.Blocks:
             try:
                 result = await brain.query_async(message, tool_deps=tool_deps)
                 reply = result.reply
+                # TTS 只念 LLM 回复本体;工具轨迹拼接版(下方)仅进聊天窗展示。
+                # (2026-09-16 用户实测:拼接版喂 TTS 会把 "已执行:play_emotion(
+                # {'emotion': 'hello'})" 连括号引号下划线一起念出来)
+                reply_plain = reply
 
                 # 工具调用轨迹 → state_bus
                 tool_trace = [
@@ -863,13 +903,14 @@ def build_ui() -> gr.Blocks:
                 ]
                 bus.update("last_tool_calls", tool_trace)
 
-                # 在 reply 末尾追加工具调用摘要
+                # 在 reply 末尾追加工具调用摘要(仅展示层)
                 if tool_trace:
                     summary = ", ".join(f"{tc['name']}({tc['arguments']})" for tc in tool_trace)
                     reply = f"{reply}\n_(已执行:{summary})_"
             except Exception as e:
                 logger.exception("[respond] LLM 调用失败")
                 reply = f"(LLM 错误:{type(e).__name__}: {e})"
+                reply_plain = reply
 
             bus.update("status", STATE_SPEAKING if reply else STATE_IDLE)
             bus.update("last_reply", reply)
@@ -880,11 +921,12 @@ def build_ui() -> gr.Blocks:
             ]
 
             # 2. TTS(async,直接 await)→ 输出到浏览器播报组件
+            #    输入用 reply_plain(无工具轨迹拼接),轨迹文本不进播报
             wav: str | None = None
-            if reply:
+            if reply_plain:
                 bus.update("status", STATE_PLAYING)
                 try:
-                    wav = await _tts_and_play(get_tts(), reply)
+                    wav = await _tts_and_play(get_tts(), reply_plain)
                 except Exception as e:
                     logger.warning(f"[respond] TTS 失败: {e}")
 
