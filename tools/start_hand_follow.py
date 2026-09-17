@@ -17,8 +17,11 @@ class StartHandFollowTool(Tool):
 
     name = "start_hand_follow"
     description = (
-        "Start following the user's hand with the camera. "
-        "Robot's head will track the detected palm. Default disabled."
+        "Start following the user's hand with the camera: the robot's head "
+        "tracks the detected palm in real time. "
+        "用中文说「开始手部跟随」「跟着我手」「看着我的手」「跟我挥手」等"
+        "开启此功能;需要真机已连接且手掌在其摄像头前。默认关闭,"
+        "用完应调 stop_hand_follow 关闭。"
     )
     parameters_schema: dict[str, Any] = {
         "type": "object",
@@ -45,5 +48,9 @@ class StartHandFollowTool(Tool):
         return {
             "status": "started",
             "available": hf.available,
+            "message": (
+                "已开启手部跟随。提醒用户:把手掌举到机器人摄像头前,"
+                "头部会实时跟随;说「停止手部跟随」可关闭。"
+            ),
             "stage": "P6",
         }

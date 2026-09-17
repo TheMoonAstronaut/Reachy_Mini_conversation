@@ -264,13 +264,13 @@ def test_hand_follower_tick_with_mock_landmarker(tmp_path):
         mp.tasks.vision.HandLandmarker = FakeHandLandmarker
 
         orch = MagicMock()
-        # orch.goto_target 是 async(head=pose, duration=...)
+        # orch.set_target 是 async(head=pose)
         captured_calls = []
 
-        async def fake_goto_target(**kwargs):
+        async def fake_set_target(**kwargs):
             captured_calls.append(kwargs)
 
-        orch.goto_target.side_effect = fake_goto_target
+        orch.set_target.side_effect = fake_set_target
 
         hf = HandFollower(
             orchestrator=orch,
@@ -291,9 +291,9 @@ def test_hand_follower_tick_with_mock_landmarker(tmp_path):
         # 跑 _tick 一次(同步)
         hf._tick()
 
-        # goto_target 应被调,duration 透传
-        assert len(captured_calls) >= 1, f"expected goto_target call, got {captured_calls}"
-        assert captured_calls[0]["duration"] == 0.3
+        # set_target 应被调(绝不能用阻塞的 goto_target,见 _record_gaze_calls)
+        assert len(captured_calls) >= 1, f"expected set_target call, got {captured_calls}"
+        orch.goto_target.assert_not_called()
         head_pose = captured_calls[0]["head"]
         # 手部在 (0.5, 0.4) 归一化位置 → 中心偏上 → yaw=0,pitch>0(抬头)
         import numpy as np
@@ -328,8 +328,8 @@ def test_hand_follower_no_frame_skips_gracefully():
 
     hf.enable()
     hf._tick()  # 不应崩
-    # orch.goto_target 不应被调
-    hf.orchestrator.goto_target.assert_not_called()
+    # orch.set_target 不应被调
+    hf.orchestrator.set_target.assert_not_called()
 
 
 # ============================================================================
@@ -395,7 +395,12 @@ def _patch_pil():
 
 
 def _record_gaze_calls(orch):
-    """把 orch.goto_target 换成记录 (pitch, yaw) 的假实现(经 create_head_pose 捕获)。"""
+    """把 orch.set_target 换成记录 (pitch, yaw) 的假实现(经 create_head_pose 捕获)。
+
+    同时断言绝不调用 goto_target —— 它是同步阻塞调用(SDK 内
+    wait_for_task_completion 阻塞 duration 秒),镜像双实例会把事件循环
+    冻成 ~1.6Hz,是"一卡一卡"的根因(2026-09-18 回归保护)。
+    """
     import reachy_mini.utils as rm_utils
 
     recorded: list[tuple[float, float]] = []
@@ -407,10 +412,10 @@ def _record_gaze_calls(orch):
 
     rm_utils.create_head_pose = fake_chp
 
-    async def fake_goto_target(**kwargs):
+    async def fake_set_target(**kwargs):
         pass
 
-    orch.goto_target.side_effect = fake_goto_target
+    orch.set_target.side_effect = fake_set_target
 
     def restore():
         rm_utils.create_head_pose = orig_chp

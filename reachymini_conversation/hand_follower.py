@@ -17,15 +17,22 @@
   - 跟随生效(开关开 + 检测到手)时空闲呼吸不新起段 —— 头部归跟随;
   - 与声源跟随同开时无互斥(两者皆默认关),UI 文案提示勿同开。
 
-头部驱动(2026-09-17 重构):不用 SDK look_at_image,改为
-"像素偏移 → yaw/pitch 线性映射 → MirrorOrchestrator.goto_target(天然镜像
-sim + real)"。原因(对比官方实现后的结论):
-  - 有线模式 daemon B 以 --no-media 运行 → 真机 SDK look_at_image 必抛
-    "Camera is not initialized"(它要求 daemon 相机就绪);
-  - look_at_image 内部 assert u/v 在"daemon 那路相机"的分辨率内 —— 我们
-    的帧来自 4K USB 相机,坐标喂给 sim(低分辨率)会 assert 越界;
-  - 手部跟随不需要精确内参(官方亦无 Reachy Mini 手部跟随参考实现,
-    pollen-robotics 下无此仓库),归一化偏移 + 可调增益是社区通用做法。
+头部驱动(2026-09-17 重构,09-18 两次修正):
+  A. 不用 SDK look_at_image,改为"像素偏移 → yaw/pitch 线性映射"
+     (原因见下);经 MirrorOrchestrator 一次调用镜像 sim + real。
+  B. 用 set_target(15Hz 流式发送 EMA 平滑后的目标姿态),**不用**
+     goto_target —— SDK goto_target 是同步阻塞实现(client 侧
+     wait_for_task_completion 整整 duration 秒!),镜像双实例串行
+     后每次指令冻结事件循环 ~0.6s、等效更新率仅 ~1.6Hz,这就是用户
+     实测"一卡一卡"的根因(2026-09-18 实锤)。set_target fire-and-
+     forget,daemon 伺服直接追踪流式目标,配合 EMA 增量小步进 = 丝滑。
+  C. 不用 look_at_image 的原因(对比官方实现后的结论):
+     - 有线模式 daemon B 以 --no-media 运行 → 真机 SDK look_at_image
+       必抛 "Camera is not initialized"(它要求 daemon 相机就绪);
+     - look_at_image 内部 assert u/v 在"daemon 那路相机"的分辨率内,
+       我们的帧来自 4K USB 相机,坐标喂给 sim(低分辨率)会越界;
+     - 官方无 Reachy Mini 手部跟随参考实现(pollen-robotics 下无此
+       仓库),归一化偏移 + 可调增益是社区通用做法。
 
 符号约定(2026-09-18 从 SDK 源码推导,勿凭直觉改):
   reachy 头部系由 look_at.py DEFAULT_HEAD_TO_CAMERA_TRANSFORM 定义:
@@ -88,7 +95,8 @@ class HandFollower:
         poll_hz: float = 15.0,
         model_path: str | None = None,
         landmark_index: int = 9,  # 中指 MCP = 手掌中心(plan.md §4.3)
-        duration: float = 0.3,
+        duration: float = 0.3,  # 已废弃(2026-09-18):set_target 流式驱动不再使用,
+        #                        保留参数仅为 API 兼容
         smooth_alpha: float = 0.35,   # u/v EMA 平滑系数(越小越稳,越大越跟手)
         deadband_px: int = 10,        # 死区:平滑目标与上次发送差 < 该值不发送(防抖)
         gaze_gain_yaw_deg: float = 25.0,   # 归一化偏移 x∈[-1,1] → yaw 增益(度)
@@ -408,9 +416,10 @@ class HandFollower:
                 return  # 死区内:不发送,减少关节指令抖动
         self._last_sent = (su, sv)
 
-        # 6. 驱动头部:像素偏移 → yaw/pitch 线性映射 → goto_target(sim+real 镜像)
-        #    不用 SDK look_at_image(有线 daemon --no-media 必抛 Camera not
-        #    initialized;且其分辨率 assert 与 4K USB 帧坐标不兼容)。
+        # 6. 驱动头部:像素偏移 → yaw/pitch 线性映射 → set_target(sim+real 镜像)
+        #    set_target 为 fire-and-forget(15Hz 流式小步进,daemon 伺服追踪),
+        #    绝不能用 goto_target —— 它是同步阻塞调用,镜像双实例会把事件
+        #    循环冻住、有效更新率掉到 ~1.6Hz(卡顿根因,见模块 docstring)。
         #    符号约定(SDK 源码推导,见模块 docstring):
         #      正 pitch=低头、正 yaw=转向图像左
         #      → yaw=-nx*gain(手在图像右→看右),pitch=+ny*gain(手在图像下→看下)
@@ -443,22 +452,12 @@ class HandFollower:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     asyncio.run_coroutine_threadsafe(
-                        self.orchestrator.goto_target(
-                            head=head_pose, duration=self.duration
-                        ),
+                        self.orchestrator.set_target(head=head_pose),
                         loop,
                     )
                 else:
-                    asyncio.run(
-                        self.orchestrator.goto_target(
-                            head=head_pose, duration=self.duration
-                        )
-                    )
+                    asyncio.run(self.orchestrator.set_target(head=head_pose))
             except RuntimeError:
-                asyncio.run(
-                    self.orchestrator.goto_target(
-                        head=head_pose, duration=self.duration
-                    )
-                )
+                asyncio.run(self.orchestrator.set_target(head=head_pose))
         except Exception as e:
-            logger.debug(f"[hand-follower] goto_target failed: {e}")
+            logger.debug(f"[hand-follower] set_target failed: {e}")

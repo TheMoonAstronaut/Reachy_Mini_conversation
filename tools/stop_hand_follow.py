@@ -13,7 +13,10 @@ class StopHandFollowTool(Tool):
     """Disable the camera-based hand-following behavior."""
 
     name = "stop_hand_follow"
-    description = "Stop following the user's hand (head returns to neutral)."
+    description = (
+        "Stop following the user's hand (head stays at last pose). "
+        "用中文说「停止手部跟随」「别跟着我的手了」「停止跟随」等关闭此功能。"
+    )
     parameters_schema: dict[str, Any] = {
         "type": "object",
         "properties": {},
