@@ -27,6 +27,19 @@ sim + real)"。原因(对比官方实现后的结论):
   - 手部跟随不需要精确内参(官方亦无 Reachy Mini 手部跟随参考实现,
     pollen-robotics 下无此仓库),归一化偏移 + 可调增益是社区通用做法。
 
+符号约定(2026-09-18 从 SDK 源码推导,勿凭直觉改):
+  reachy 头部系由 look_at.py DEFAULT_HEAD_TO_CAMERA_TRANSFORM 定义:
+  X=前、Y=图像左、Z=图像上;create_head_pose 用 R.from_euler("xyz")。
+  推得:正 pitch = 低头,正 yaw = 转向图像左。因此:
+    yaw_cmd   = -nx * gain   (手在图像右 → nx>0 → 负 yaw = 看右 ✓)
+    pitch_cmd = +ny * gain   (手在图像下 → ny>0 → 正 pitch = 看下 ✓)
+  2026-09-17 首版两符号皆反(用户实测"手往上头往下、左变右")。
+
+性能(2026-09-18):检测前降采样——4K 全尺寸 PIL 解码实测 69ms/帧导致
+tick 超时卡顿;PIL draft 对 MJPEG 实测不生效;改用 cv2.imdecode 的
+IDCT 层 1/4 降采样(960x540,~11ms)再缩到 640 宽检测(~8ms),
+单帧 ~19ms ≪ 15Hz 预算 67ms。cv2 是 mediapipe 的传递依赖,失败回退 PIL。
+
 模型下载(用户首次使用):
   - https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
   - 保存到 ~/.cache/reachymini/hand_landmarker.task(或环境变量指定)
@@ -82,6 +95,8 @@ class HandFollower:
         gaze_gain_pitch_deg: float = 18.0, # 归一化偏移 y∈[-1,1] → pitch 增益(度)
         yaw_limit_deg: float = 35.0,       # 偏航安全限位
         pitch_limit_deg: float = 25.0,     # 俯仰安全限位
+        flip_horizontal: bool = False,     # 相机硬件镜像时开:检测前水平翻转图像
+        detect_width: int = 640,           # 检测前降采样宽度(4K 全解太慢会卡)
     ) -> None:
         self.orchestrator = orchestrator
         self.get_frame_jpeg_fn = get_frame_jpeg_fn
@@ -95,6 +110,8 @@ class HandFollower:
         self.gaze_gain_pitch_deg = float(gaze_gain_pitch_deg)
         self.yaw_limit_deg = abs(float(yaw_limit_deg))
         self.pitch_limit_deg = abs(float(pitch_limit_deg))
+        self.flip_horizontal = bool(flip_horizontal)
+        self.detect_width = max(int(detect_width), 160)
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -290,13 +307,49 @@ class HandFollower:
         if not jpeg_bytes:
             return
 
-        # 3. JPEG bytes → numpy RGB array
+        # 3. JPEG bytes → numpy RGB array(检测前降采样:4K 全尺寸 PIL 解码
+        #    实测 69ms/帧,tick 追不上 15Hz → 跟随卡顿。PIL draft 对 MJPEG
+        #    流实测不生效(尺寸不变);cv2.imdecode 走 IDCT 层 1/4 降采样
+        #    解码仅 ~11ms(960x540,精度足够:MediaPipe 内部跑 224px ROI)。
+        #    cv2 由 mediapipe 传递依赖保证存在,失败回退 PIL 路径)
         try:
             import numpy as np
-            from PIL import Image as PILImage
 
-            img = PILImage.open(__import__("io").BytesIO(jpeg_bytes)).convert("RGB")
-            arr = np.array(img)  # (H, W, 3) RGB uint8
+            arr = None
+            try:
+                import cv2
+
+                bgr = cv2.imdecode(
+                    np.frombuffer(jpeg_bytes, dtype=np.uint8),
+                    cv2.IMREAD_REDUCED_COLOR_4,  # 1/4 IDCT 降采样
+                )
+                if bgr is not None:
+                    arr = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                logger.debug(f"[hand-follower] cv2 解码失败,回退 PIL: {e}")
+                arr = None
+            if arr is None:
+                from PIL import Image as PILImage
+
+                img = PILImage.open(__import__("io").BytesIO(jpeg_bytes)).convert("RGB")
+                _w = getattr(img, "width", None)
+                if _w is not None and _w > self.detect_width and hasattr(img, "resize"):
+                    img = img.resize(
+                        (self.detect_width, int(img.height * self.detect_width / img.width))
+                    )
+                arr = np.array(img)
+            if arr.shape[1] > self.detect_width:
+                import cv2
+
+                arr = cv2.resize(
+                    arr,
+                    (self.detect_width, int(arr.shape[0] * self.detect_width / arr.shape[1])),
+                    interpolation=cv2.INTER_AREA,
+                )
+            if self.flip_horizontal:
+                # 相机硬件镜像修正(检测坐标系翻转);fliplr 产生负步长视图,
+                # 转连续内存避免下游(np/mediapipe)兼容问题
+                arr = np.ascontiguousarray(np.fliplr(arr))
             h, w = arr.shape[:2]
         except Exception as e:
             logger.debug(f"[hand-follower] JPEG decode failed: {e}")
@@ -357,18 +410,21 @@ class HandFollower:
 
         # 6. 驱动头部:像素偏移 → yaw/pitch 线性映射 → goto_target(sim+real 镜像)
         #    不用 SDK look_at_image(有线 daemon --no-media 必抛 Camera not
-        #    initialized;且其分辨率 assert 与 4K USB 帧坐标不兼容)。见模块 docstring。
+        #    initialized;且其分辨率 assert 与 4K USB 帧坐标不兼容)。
+        #    符号约定(SDK 源码推导,见模块 docstring):
+        #      正 pitch=低头、正 yaw=转向图像左
+        #      → yaw=-nx*gain(手在图像右→看右),pitch=+ny*gain(手在图像下→看下)
         if self.orchestrator is None:
             return
-        nx = (su - w * 0.5) / (w * 0.5)   # -1..1(图像中心为 0)
+        nx = (su - w * 0.5) / (w * 0.5)   # -1..1(图像中心为 0,右正)
         ny = (sv - h * 0.5) / (h * 0.5)   # -1..1(v 向下为正)
         yaw_deg = max(
             -self.yaw_limit_deg,
-            min(self.yaw_limit_deg, nx * self.gaze_gain_yaw_deg),
+            min(self.yaw_limit_deg, -nx * self.gaze_gain_yaw_deg),
         )
         pitch_deg = max(
             -self.pitch_limit_deg,
-            min(self.pitch_limit_deg, -ny * self.gaze_gain_pitch_deg),
+            min(self.pitch_limit_deg, ny * self.gaze_gain_pitch_deg),
         )
         try:
             from reachy_mini.utils import create_head_pose

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+
+import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -475,7 +477,7 @@ def test_tick_deadband_suppresses_micro_motion():
         hf._landmarker.lm = _FakeLandmark(0.8, 0.5)
         hf._tick()
         assert len(recorded) == 2
-        assert recorded[1][1] > recorded[0][1], "右侧的手应产生正 yaw"
+        assert recorded[1][1] < recorded[0][1], "右侧的手应产生负 yaw(正 yaw=看左)"
     finally:
         PIL.Image.open = orig_open
         restore()
@@ -502,8 +504,8 @@ def test_ema_smoothing_lags_behind_detection():
         hf._landmarker.lm = _FakeLandmark(0.9, 0.5)  # 检测跳到 576
         hf._tick()
         # EMA su = 0.25*576 + 0.75*320 = 384 → nx=(384-320)/320=0.2
-        # yaw = 0.2 * gaze_gain_yaw_deg(25) = 5.0(而非直接跳 0.8*25=20)
-        assert recorded[-1][1] == 5.0
+        # yaw = -(0.2 * gaze_gain_yaw_deg(25)) = -5.0(而非直接跳 -20)
+        assert recorded[-1][1] == -5.0
     finally:
         PIL.Image.open = orig_open
         restore()
@@ -525,15 +527,82 @@ def test_disable_resets_smoothing_state():
     try:
         hf = _make_ready_follower(orch, lm=_FakeLandmark(0.9, 0.5), deadband_px=0)
         hf._tick()
-        assert recorded[-1][1] == 20.0  # nx=0.8 → 0.8*25
+        assert recorded[-1][1] == -20.0  # nx=0.8 → -(0.8*25)
 
         hf.disable()
         assert hf._smooth_u is None and hf._last_sent is None
 
         hf.enable()
         hf._landmarker.lm = _FakeLandmark(0.1, 0.5)
-        hf._tick()  # EMA 重新初始化 → 直接等于新检测值(nx=-0.8 → yaw=-20)
-        assert recorded[-1][1] == -20.0
+        hf._tick()  # EMA 重新初始化 → 直接等于新检测值(nx=-0.8 → yaw=+20)
+        assert recorded[-1][1] == 20.0
+    finally:
+        PIL.Image.open = orig_open
+        restore()
+
+
+def test_flip_horizontal_mirrors_detection_coords():
+    """相机硬件镜像时 flip_horizontal=True:检测坐标系翻转,yaw 取反。
+
+    假相机画面里"手"(亮条)固定在图像右(0.8):
+    - flip=False:质心 x=0.9 → nx=+0.8 → yaw=-20
+    - flip=True :图像先翻转,亮条落到左缘 → nx=-0.8 → yaw=+20
+    """
+    import PIL.Image
+
+    from reachymini_conversation.state_bus import reset_state_bus
+
+    reset_state_bus()
+
+    class _HandPILImage:
+        """假相机:画面右侧 1/16 宽亮条 = 假手。"""
+
+        def __init__(self, *a, **k):
+            pass
+
+        def convert(self, mode):
+            import numpy as np
+
+            arr = np.zeros((480, 640, 3), dtype=np.uint8)
+            arr[:, int(0.8 * 640) :] = 255
+            return arr
+
+    class _ScanLandmarker:
+        """假检测器:亮条质心列 = 手掌 x 位置(对翻转敏感)。"""
+
+        def detect_for_video(self, image, timestamp_ms):
+            import numpy as np
+
+            view = image.numpy_view()
+            mask = view.mean(axis=2) > 128
+            cols = np.nonzero(mask.any(axis=0))[0]
+            if len(cols) == 0:
+                return _FakeHandResult(None)
+            x = float(cols.mean()) / float(view.shape[1])
+            return _FakeHandResult(_FakeLandmark(x, 0.5))
+
+        def close(self):
+            pass
+
+    orch = MagicMock()
+    recorded, restore = _record_gaze_calls(orch)
+
+    orig_open = PIL.Image.open
+    PIL.Image.open = _HandPILImage
+    try:
+        hf = _make_ready_follower(
+            orch, lm=_FakeLandmark(0.8, 0.5), deadband_px=0, flip_horizontal=False
+        )
+        hf._landmarker = _ScanLandmarker()
+        hf._tick()
+        assert recorded[-1][1] == pytest.approx(-20.0, abs=0.5), f"未翻转:右侧手 → 看右(负 yaw): {recorded}"
+
+        hf2 = _make_ready_follower(
+            orch, lm=_FakeLandmark(0.8, 0.5), deadband_px=0, flip_horizontal=True
+        )
+        hf2._landmarker = _ScanLandmarker()
+        hf2._tick()
+        assert recorded[-1][1] == pytest.approx(20.0, abs=0.5), f"翻转后:亮条在左 → 看左(正 yaw): {recorded}"
     finally:
         PIL.Image.open = orig_open
         restore()
