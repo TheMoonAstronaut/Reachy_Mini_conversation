@@ -9,7 +9,10 @@
   3. `inline code` → code
   4. 行首 # / > / 列表符 - * + → 去掉
   5. **粗** / *斜* / __粗__ / _斜_ / ~~删~~ → 保留文字
-  6. 残留裸下划线一律 → 空格(snake_case 念成 "snake case",不再念"下划线")
+  5b. 残留不成对的 * / ＊ → 空格(否则被念"星号")
+  6. 残留裸下划线(半角 _ / 全角 ＿ / ‗)一律 → 空格
+     (snake_case 念成 "snake case";全角下划线 LLM 中文输出常见,同样被念)
+  6b. Markdown 表格 | / ｜ → 空格(否则被念"竖线")
   7. 压缩多余空白
 
 注意:本函数只服务 TTS 播报,不改变聊天窗里展示的原始 Markdown 文本。
@@ -26,7 +29,9 @@ _HEADING = re.compile(r"^#{1,6}\s*", re.MULTILINE)
 _QUOTE = re.compile(r"^>[ \t]?", re.MULTILINE)
 _BULLET = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
 _EMPHASIS = re.compile(r"(\*{1,3}|_{1,3}|~~)(.+?)\1")
-_UNDERSCORE = re.compile(r"_+")
+_STRAY_STAR = re.compile(r"[＊*]+")
+_UNDERSCORE = re.compile(r"[＿‗_]+")
+_TABLE_BAR = re.compile(r"[|｜]")
 _MULTI_SPACE = re.compile(r"[ \t]+")
 _MULTI_BLANK = re.compile(r"\n[ \t]*\n[ \t]*(\n[ \t]*)+")
 
@@ -43,7 +48,9 @@ def clean_text_for_tts(text: str | None) -> str:
     t = _QUOTE.sub("", t)
     t = _BULLET.sub(r"\1", t)
     t = _EMPHASIS.sub(r"\2", t)  # **强调** → 强调
-    t = _UNDERSCORE.sub(" ", t)  # 残留下划线 → 空格
+    t = _STRAY_STAR.sub(" ", t)  # 残留不成对的星号 → 空格
+    t = _UNDERSCORE.sub(" ", t)  # 残留下划线(含全角 ＿) → 空格
+    t = _TABLE_BAR.sub(" ", t)  # Markdown 表格竖线 → 空格
     t = _MULTI_SPACE.sub(" ", t)
     t = _MULTI_BLANK.sub("\n\n", t)
     return t.strip()

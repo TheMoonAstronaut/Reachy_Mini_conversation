@@ -31,6 +31,40 @@ class TestEmphasis:
         assert "move head" in out
 
 
+class TestFullWidthAndStraySymbols:
+    """回归(2026-09-16 用户实测复念):全角下划线 / 表格竖线 / 残留星号。
+
+    LLM 中文输出常用全角 ＿(U+FF3F),Edge TTS 同样念"下划线";
+    Markdown 表格的 | 被念"竖线";不成对的 * 被念"星号"。
+    """
+
+    def test_fullwidth_underscore_removed(self) -> None:
+        out = clean_text_for_tts("字段名是 user＿name＿v2")
+        assert "＿" not in out
+        assert "user name v2" in out
+
+    def test_table_bars_removed(self) -> None:
+        out = clean_text_for_tts("| 名称 | 数量 |\n| --- | --- |\n| 苹果 | 3 |")
+        assert "|" not in out
+        assert "名称" in out and "苹果" in out
+
+    def test_fullwidth_table_bar_removed(self) -> None:
+        out = clean_text_for_tts("数值｜单位")
+        assert "｜" not in out
+        assert "数值" in out and "单位" in out
+
+    def test_stray_star_removed(self) -> None:
+        """成对的 **粗** 由 emphasis 规则保留文字;单个残留 * 不得念出。"""
+        out = clean_text_for_tts("注意 * 重要 * 全角 ＊ 也一样")
+        assert "*" not in out and "＊" not in out
+        assert "重要" in out
+
+    def test_paired_emphasis_still_keeps_text(self) -> None:
+        """防回归:增强规则不得破坏成对强调的文字保留。"""
+        out = clean_text_for_tts("这是 **重点** 与 _斜体_")
+        assert "重点" in out and "斜体" in out
+
+
 class TestMarkdownStructures:
     def test_link(self) -> None:
         assert clean_text_for_tts("[点击这里](https://example.com) 查看") == "点击这里 查看"
