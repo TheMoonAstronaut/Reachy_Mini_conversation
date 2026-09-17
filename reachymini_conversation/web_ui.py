@@ -239,13 +239,26 @@ REACHY_CSS = """
 .rm-statusbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 14px;
   margin-bottom: 10px;
   background: #11161F;
   border: 1px solid #232C3B;
   border-radius: 8px;
+  flex-wrap: wrap;         /* 空间不足时徽章换行,不再溢出截断 */
+  row-gap: 6px;
 }
+.rm-statusbar > .gradio-html {
+  min-width: 0 !important; /* 允许 pill 收缩,配合 wrap 防挤压 */
+}
+/* Gradio Row 默认给所有子项 flex:1 1 0%(均分宽度),徽章内容被挤没。
+   顶栏子项改为内容自适应;首项(品牌)吃满剩余空间,把徽章推向右侧。
+   注意 gr.HTML 内部容器默认 width:100%,会把 flex-basis:auto 撑成整行,
+   必须显式 fit-content(2026-09-17 实测:不设置则每项独占一行)。 */
+.rm-statusbar > * { flex: 0 0 auto !important; }
+.rm-statusbar > div.block { width: fit-content !important; min-width: 0 !important; }
+.rm-statusbar > :first-child { margin-right: auto !important; }
+.rm-statusbar .auto-margin { margin-left: 0 !important; }
 .rm-brand {
   display: flex;
   align-items: center;
@@ -270,10 +283,10 @@ REACHY_CSS = """
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
+  gap: 5px;
+  padding: 3px 10px;
   border-radius: 999px;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.5;
   border: 1px solid #2A3442;
@@ -281,7 +294,7 @@ REACHY_CSS = """
   color: #9AA7B8;
   white-space: nowrap;
 }
-.pill code { background: none; border: none; color: inherit; font-size: 12px; padding: 0; }
+.pill code { background: none; border: none; color: inherit; font-size: 11.5px; padding: 0; }
 .pill--ok     { color: #3FB950; border-color: rgba(63,185,80,.45);  background: rgba(63,185,80,.08); }
 .pill--busy   { color: #58A6FF; border-color: rgba(88,166,255,.45); background: rgba(88,166,255,.08); }
 .pill--accent { color: #FF8C00; border-color: rgba(255,140,0,.45);  background: rgba(255,140,0,.08); }
@@ -309,8 +322,8 @@ REACHY_CSS = """
 
 /* ---------- 运行模式下拉(V2,紧凑嵌进状态栏) ---------- */
 .rm-mode-dropdown {
-  min-width: 190px !important;
-  max-width: 210px;
+  min-width: 160px !important;
+  max-width: 175px;
 }
 .rm-mode-dropdown .wrap, .rm-mode-dropdown .wrap-inner {
   background: #151B24 !important;
@@ -419,18 +432,18 @@ def build_ui() -> gr.Blocks:
                 show_label=False,
                 container=False,
                 interactive=True,
-                min_width=190,
+                min_width=165,
                 elem_classes=["rm-mode-dropdown"],
             )
             # 真机连接/断开快捷按钮(2026-09-16 用户需求:网页先切真机模式、
             # 后插 USB 时需要反复切换才能连上;给显式重连/断开入口,
             # 复用下拉同一 switch 通路)
             connect_real_btn = gr.Button(
-                "⚡ 连接真机", size="sm", min_width=110,
+                "⚡ 连接真机", size="sm", min_width=96,
                 elem_classes=["rm-mode-btn"],
             )
             disconnect_real_btn = gr.Button(
-                "✕ 断开真机", size="sm", min_width=110,
+                "✕ 断开真机", size="sm", min_width=96,
                 elem_classes=["rm-mode-btn"],
             )
         # V2:模式切换的结果提示(切真机的进度/失败原因),紧贴状态栏下方
@@ -492,7 +505,7 @@ def build_ui() -> gr.Blocks:
                 chatbot = gr.Chatbot(
                     value=[],
                     label="对话历史",
-                    height=420,
+                    height=520,
                     placeholder=(
                         "和 Reachy 开始对话吧:\n"
                         "· 文字:「你好」「点点头」「跳一段舞」(LLM 会调用工具)\n"
@@ -552,8 +565,11 @@ def build_ui() -> gr.Blocks:
                 # P6:手部跟随启停(简单 UI 按钮,状态写到 state_bus)
                 with gr.Accordion("🤚 手部跟随(P6)", open=False):
                     gr.Markdown(
-                        "_MediaPipe 1.0+ HandLandmarker。"
-                        "需要模型文件:`~/.cache/reachymini/hand_landmarker.task_"
+                        "_MediaPipe HandLandmarker,手掌中心(中指根部)驱动头部看向。"
+                        "检测到手后头部平滑跟随(EMA 防抖)。_\n\n"
+                        "**动作仲裁**:Reachy 说话/播报时自动让位(wobbler 摆头优先);"
+                        "跟随期间空闲呼吸自动暂停;与「声源跟随」同开会互相争抢头部,"
+                        "**建议只开一个**。真机模式需要 USB 相机画面。"
                     )
                     with gr.Row():
                         hand_start_btn = gr.Button("▶ 启动跟随", variant="primary")
@@ -1275,12 +1291,22 @@ def _render_hand(snapshot: dict[str, Any]) -> str:
     return '<span class="pill pill--ok">🖐 跟随中 · ⏳ 等待手出现…</span>'
 
 
-def _mjpeg_img_html(*, url: str, alt: str, available: bool, min_height: int = 320) -> str:
+def _mjpeg_img_html(
+    *,
+    url: str,
+    alt: str,
+    available: bool,
+    min_height: int = 320,
+    max_height: int = 480,
+) -> str:
     """MJPEG <img> 容器(带 onerror 自愈重连,三处视频区共用)。
 
     P7.C:onerror 自动重连。浏览器 <img> 的 MJPEG 连接一旦失败不会自己重试,
     而 Gradio tick 返回相同 HTML 时不更新 DOM → 裂图会永远卡住。
     失败后 2s 带 cache-busting query 重连,流恢复后浏览器侧也能自愈。
+
+    max_height:图片最大显示高度(等比缩放,不裁剪)。主区副视角用 320 限高,
+    否则 640x480 流在宽列里撑到 480px+,左右列严重失衡(2026-09-17 UI 调优)。
     """
     src = url if available else ""
     onerror = (
@@ -1291,7 +1317,7 @@ def _mjpeg_img_html(*, url: str, alt: str, available: bool, min_height: int = 32
     )
     return f"""
 <div style="background:#000;border:1px solid #2A3442;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:{min_height}px;">
-  <img src="{src}" style="max-width:100%;max-height:480px;display:block;" alt="{alt}"
+  <img src="{src}" style="max-width:100%;max-height:{max_height}px;display:block;" alt="{alt}"
        {onerror} />
 </div>
 """.strip()
@@ -1408,12 +1434,13 @@ def _viewer_3d_html() -> str:
 
 
 def _sim_feed_html(*, sim_available: bool) -> str:
-    """副视角(sim):机器人眼睛相机流(eye_camera,1280x720)。"""
+    """副视角(sim):机器人眼睛相机流(eye_camera,1280x720),限高 320。"""
     return _mjpeg_img_html(
         url="http://localhost:7861/sim_feed",
         alt="Reachy eye camera feed",
         available=sim_available,
         min_height=180,
+        max_height=320,
     )
 
 
@@ -1432,6 +1459,7 @@ def _eye_feed_html(*, run_mode: str, eye_available: bool) -> str:
         alt="Real robot camera feed",
         available=True,
         min_height=180,
+        max_height=320,
     )
 
 
