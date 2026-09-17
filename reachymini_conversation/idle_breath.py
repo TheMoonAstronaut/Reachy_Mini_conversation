@@ -15,8 +15,10 @@
   - 打断延迟 ≤ 一段时长(8s):段播完发现已有活动就不再续播。
     (官方在 60Hz 循环里即时打断;我们接受段粒度延迟,视觉上是呼吸自然收尾)
 
-防冲突:仅在 bus.status == "idle" 且无活动时播放;播放期间若用户发命令,
-当前段播完即停(工具的 set_target 会立即接管,视觉无跳变)。
+防冲突(2026-09-16 用户定语义):**只有 Reachy 自己说话(speaking/playing)
+时不播呼吸** —— 那时由音频 wobbler 驱动头部摆动作"特别动作";
+用户说话(listening)、语义分析(thinking)、空闲待机都播呼吸当底色动作。
+播放期间若用户发命令,当前段播完即停(工具的 set_target 立即接管)。
 """
 
 from __future__ import annotations
@@ -47,10 +49,12 @@ SEGMENT_CYCLES_S = 8.0           # 每段时长(一个呼吸循环)
 # 活动检测:这些 bus 字段变化 = 有活动
 _ACTIVITY_KEYS = ("last_reply", "voice_turn_seq", "last_tool_calls", "chat_mode", "run_mode")
 
-# 忙碌状态(bus.status):这些状态下不播呼吸。
+# 忙碌状态(bus.status):只有"speaking/playing"(Reachy 自己播报)时不播 ——
+# 播报由音频 wobbler 驱动头部摆动(特别动作),不与呼吸叠加;
+# listening(用户说话)/thinking(语义分析)/空闲都播呼吸。
 # 注意用否定集合而非白名单:bus 初始 status="starting"(无对话时一直是它),
 # 白名单写法会让空闲呼吸永不启动(2026-09-16 测试暴露)。
-_BUSY_STATES = frozenset({"listening", "thinking", "speaking", "playing"})
+_BUSY_STATES = frozenset({"speaking", "playing"})
 
 
 class BreathingMove(Move):
@@ -103,7 +107,7 @@ class IdleBreathController:
 
     Args:
         target: 动作目标(MirroredToolTarget 或任何有 async_play_move 的对象)
-        idle_after_s: 无活动多少秒后开始呼吸(默认 25s)
+        idle_after_s: 无活动多少秒后开始呼吸(默认 10s;对话间隙也连贯)
         check_interval_s: 轮询间隔(默认 2s)
         pose_getter: 返回 (head_pose_4x4, antennas(2,)) 的 callable,
             用于插值起点(默认 None → 从 neutral 开始,不插)
@@ -113,19 +117,22 @@ class IdleBreathController:
         self,
         target: Any,
         *,
-        idle_after_s: float = 25.0,
+        idle_after_s: float = 10.0,
         check_interval_s: float = 2.0,
         pose_getter: Any = None,
+        post_speech_grace_s: float = 2.0,
     ) -> None:
         self._target = target
         self._idle_after_s = idle_after_s
         self._check_interval_s = check_interval_s
         self._pose_getter = pose_getter
+        self._post_speech_grace_s = post_speech_grace_s
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._playing = False
         self._last_activity = time.monotonic()
         self._last_seen: dict[str, Any] = {}
+        self._status: str = "idle"  # 上一轮 status(下降沿检测用)
 
     # ---------- 生命周期 ----------
     def start(self) -> None:
@@ -161,8 +168,20 @@ class IdleBreathController:
             if v != self._last_seen[k] and v is not None:
                 self._last_seen[k] = v
                 self._last_activity = time.monotonic()
+
+        prev_status = self._status
         self._status = snap.get("status", "idle")
         self._run_mode = snap.get("run_mode", "pure_sim")
+
+        # 播报结束沿(speaking/playing → 非 busy):wobbler 摆动停止的瞬间
+        # 就是新一段"机器人空闲"的开始 —— 把 idle 计时起点拨到播完时刻
+        # (留 post_speech_grace_s 衔接宽限)。否则短回答播完后要等满
+        # idle_after_s,中间出现一段"动作真空"(2026-09-16 用户实测:
+        # "回答后的动作结束后,会有一段时间待机动作停止")。
+        if prev_status in _BUSY_STATES and self._status not in _BUSY_STATES:
+            self._last_activity = (
+                time.monotonic() - self._idle_after_s + self._post_speech_grace_s
+            )
 
     def _play_one_segment(self) -> None:
         """播一段 8s 呼吸(同步包装 async_play_move)。"""

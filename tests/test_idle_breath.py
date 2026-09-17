@@ -124,14 +124,64 @@ class TestIdleBreathController:
         finally:
             ctl.stop()
 
-    def test_no_play_when_status_not_idle(self) -> None:
+    @pytest.mark.parametrize("busy", ["speaking", "playing"])
+    def test_no_play_when_robot_speaking(self, busy: str) -> None:
+        """Reachy 自己播报时不播呼吸 —— 那时 wobbler 驱动头部摆动(特别动作)。
+
+        2026-09-16 用户定语义:只有说话时做特别动作,其他时间都是呼吸。
+        """
         target = _FakeTarget()
-        get_state_bus().update("status", "speaking")
+        get_state_bus().update("status", busy)
         ctl = IdleBreathController(target, idle_after_s=0.2, check_interval_s=0.05)
         ctl.start()
         try:
             time.sleep(0.8)
-            assert not target.played, "TTS 播放期(status=speaking)不应呼吸"
+            assert not target.played, f"播报期(status={busy})应让位 wobbler,不播呼吸"
+        finally:
+            ctl.stop()
+
+    @pytest.mark.parametrize("own_time", ["listening", "thinking"])
+    def test_plays_during_breath_background_time(self, own_time: str) -> None:
+        """用户说话/语义分析期播呼吸 —— 呼吸是默认底色动作(2026-09-16 语义)。"""
+        target = _FakeTarget()
+        get_state_bus().update("status", own_time)
+        ctl = IdleBreathController(target, idle_after_s=0.2, check_interval_s=0.05)
+        ctl.start()
+        try:
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and not target.played:
+                time.sleep(0.05)
+            assert target.played, f"status={own_time} 应播呼吸(底色动作)"
+        finally:
+            ctl.stop()
+
+    def test_breath_resumes_quickly_after_speech_ends(self) -> None:
+        """播报结束(speaking→idle)后 grace 秒内必须接呼吸(防动作真空)。
+
+        回归(2026-09-16 用户实测):计时起点原是"回复生成时刻",短回答播完
+        后 idle_for 远未满 idle_after_s → 出现数秒"待机动作停止"空窗。
+        修复:检测播报结束下降沿,把计时起点拨到播完时刻。
+        """
+        target = _FakeTarget()
+        bus = get_state_bus()
+        bus.update("status", "speaking")
+        # idle_after_s 较大,模拟"回复生成已久、短回答刚播完"的场景:
+        # 若无下降沿修复,播完后要等几乎完整的 idle_after_s
+        ctl = IdleBreathController(
+            target, idle_after_s=3.0, check_interval_s=0.05,
+            post_speech_grace_s=0.2,
+        )
+        ctl.start()
+        try:
+            time.sleep(0.3)  # 控制器采样到 speaking 基线
+            assert not target.played
+            bus.update("status", "idle")  # 播报结束
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not target.played:
+                time.sleep(0.05)
+            assert target.played, (
+                "播报结束后应在 grace 宽限内接呼吸,不应等满 idle_after_s"
+            )
         finally:
             ctl.stop()
 
