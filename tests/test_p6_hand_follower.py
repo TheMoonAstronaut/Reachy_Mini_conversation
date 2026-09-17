@@ -323,3 +323,203 @@ def test_hand_follower_no_frame_skips_gracefully():
     hf._tick()  # 不应崩
     # orch.look_at_image 不应被调
     hf.orchestrator.look_at_image.assert_not_called()
+
+
+# ============================================================================
+# P6 部署仲裁(2026-09-17):播报让位 + EMA 平滑 + 死区防抖
+# ============================================================================
+class _FakeLandmark:
+    def __init__(self, x=0.5, y=0.5):
+        self.x = x
+        self.y = y
+
+
+class _FakeHandResult:
+    def __init__(self, lm):
+        self.hand_landmarks = [[lm] * 21] if lm is not None else []
+
+
+class _FakeLandmarker:
+    """可控 landmark 的假检测器:每次 detect 调用当前 lm 值。"""
+
+    def __init__(self, lm):
+        self.lm = lm
+
+    def detect_for_video(self, image, timestamp_ms):
+        return _FakeHandResult(self.lm)
+
+    def close(self):
+        pass
+
+
+class _FakePILImage:
+    """PIL.Image.open 的假返回:convert('RGB') → 640x480 黑图。"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def convert(self, mode):
+        import numpy as np
+
+        return np.zeros((480, 640, 3), dtype=np.uint8)
+
+
+def _make_ready_follower(orch, lm=None, **kwargs):
+    """造一个 _available=True、假检测器的 follower(不经 start())。"""
+    from reachymini_conversation.hand_follower import HandFollower
+
+    hf = HandFollower(
+        orchestrator=orch,
+        get_frame_jpeg_fn=lambda: b"\xff\xd8fake",
+        poll_hz=50.0,
+        model_path="/tmp/nope.task",
+        **kwargs,
+    )
+    hf._landmarker = _FakeLandmarker(lm)
+    hf._available = True
+    hf.enable()
+    return hf
+
+
+def _patch_pil():
+    import PIL.Image
+
+    return PIL.Image, PIL.Image.open
+
+
+def test_tick_yields_while_speaking():
+    """播报(status=speaking/playing)时不驱动头部,但检测状态照常更新。"""
+    import PIL.Image
+
+    from reachymini_conversation.state_bus import get_state_bus, reset_state_bus
+
+    reset_state_bus()
+    bus = get_state_bus()
+
+    captured = []
+
+    async def fake_look(u, v, duration):
+        captured.append((u, v))
+
+    orch = MagicMock()
+    orch.look_at_image.side_effect = fake_look
+
+    orig_open = PIL.Image.open
+    PIL.Image.open = _FakePILImage
+    try:
+        hf = _make_ready_follower(orch, lm=_FakeLandmark(0.5, 0.4))
+        bus.update("status", "speaking")
+        hf._tick()
+        assert captured == [], "speaking 期不允许驱动头部(wobbler 优先)"
+        assert bus.get("hand_visible") is True, "检测状态仍应更新(徽章实时)"
+
+        bus.update("status", "idle")
+        hf._tick()
+        assert len(captured) == 1, "播报结束后跟随应恢复驱动"
+    finally:
+        PIL.Image.open = orig_open
+
+
+def test_tick_deadband_suppresses_micro_motion():
+    """EMA 平滑后位移 < deadband → 不重复发送(防抖)。"""
+    import PIL.Image
+
+    from reachymini_conversation.state_bus import reset_state_bus
+
+    reset_state_bus()
+
+    captured = []
+
+    async def fake_look(u, v, duration):
+        captured.append((u, v))
+
+    orch = MagicMock()
+    orch.look_at_image.side_effect = fake_look
+
+    orig_open = PIL.Image.open
+    PIL.Image.open = _FakePILImage
+    try:
+        hf = _make_ready_follower(
+            orch, lm=_FakeLandmark(0.5, 0.5), deadband_px=10, smooth_alpha=0.5
+        )
+        hf._tick()  # 首帧:初始化 EMA 并发送 (320, 240)
+        assert len(captured) == 1
+
+        # 检测值小幅漂移(2px 级):EMA 后 < deadband → 不再发
+        hf._landmarker.lm = _FakeLandmark(0.503, 0.5)
+        for _ in range(5):
+            hf._tick()
+        assert len(captured) == 1, f"微动不应重复发送: {captured}"
+
+        # 大幅跳变:超过死区 → 发送新目标
+        hf._landmarker.lm = _FakeLandmark(0.8, 0.5)
+        hf._tick()
+        assert len(captured) == 2
+        assert captured[1][0] > captured[0][0]
+    finally:
+        PIL.Image.open = orig_open
+
+
+def test_ema_smoothing_lags_behind_detection():
+    """EMA 平滑:单次 tick 不应直接跳到检测值(α=0.25 时只走 25%)。"""
+    import PIL.Image
+
+    from reachymini_conversation.state_bus import reset_state_bus
+
+    reset_state_bus()
+
+    captured = []
+
+    async def fake_look(u, v, duration):
+        captured.append((u, v))
+
+    orch = MagicMock()
+    orch.look_at_image.side_effect = fake_look
+
+    orig_open = PIL.Image.open
+    PIL.Image.open = _FakePILImage
+    try:
+        hf = _make_ready_follower(
+            orch, lm=_FakeLandmark(0.5, 0.5), smooth_alpha=0.25, deadband_px=0
+        )
+        hf._tick()  # EMA 初始化 = 检测值 (320,240)
+        hf._landmarker.lm = _FakeLandmark(0.9, 0.5)  # 检测跳到 576
+        hf._tick()
+        # EMA = 0.25*576 + 0.75*320 = 384(而非直接 576)
+        assert captured[-1][0] == 384
+    finally:
+        PIL.Image.open = orig_open
+
+
+def test_disable_resets_smoothing_state():
+    """disable() 清 EMA/死区状态,重开不带历史惯性。"""
+    import PIL.Image
+
+    from reachymini_conversation.state_bus import reset_state_bus
+
+    reset_state_bus()
+
+    captured = []
+
+    async def fake_look(u, v, duration):
+        captured.append((u, v))
+
+    orch = MagicMock()
+    orch.look_at_image.side_effect = fake_look
+
+    orig_open = PIL.Image.open
+    PIL.Image.open = _FakePILImage
+    try:
+        hf = _make_ready_follower(orch, lm=_FakeLandmark(0.9, 0.5), deadband_px=0)
+        hf._tick()
+        assert captured[-1][0] == int(0.9 * 640)
+
+        hf.disable()
+        assert hf._smooth_u is None and hf._last_sent is None
+
+        hf.enable()
+        hf._landmarker.lm = _FakeLandmark(0.1, 0.5)
+        hf._tick()  # EMA 重新初始化 → 直接等于新检测值
+        assert captured[-1][0] == int(0.1 * 640)
+    finally:
+        PIL.Image.open = orig_open

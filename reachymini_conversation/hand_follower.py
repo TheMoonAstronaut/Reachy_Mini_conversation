@@ -12,6 +12,11 @@
   - mediapipe 没装
   → 后台线程优雅降级,UI 显"不可用"
 
+动作仲裁(2026-09-17 P6 部署定案,经 state_bus 协调,无新依赖):
+  - Reachy 播报(status=speaking/playing)时跟随让位 —— 头部归音频 wobbler;
+  - 跟随生效(开关开 + 检测到手)时空闲呼吸不新起段 —— 头部归跟随;
+  - 与声源跟随同开时无互斥(两者皆默认关),UI 文案提示勿同开。
+
 模型下载(用户首次使用):
   - https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
   - 保存到 ~/.cache/reachymini/hand_landmarker.task(或环境变量指定)
@@ -48,6 +53,10 @@ class HandFollower:
         hf.stop()
     """
 
+    # Reachy 自己播报时头部由音频 wobbler 驱动("特别动作"),跟随必须让位,
+    # 否则 look_at_image 与 wobbler 同写头部打架(2026-09-17 P6 部署仲裁)。
+    _YIELD_STATES = frozenset({"speaking", "playing"})
+
     def __init__(
         self,
         orchestrator: Any,
@@ -56,6 +65,8 @@ class HandFollower:
         model_path: str | None = None,
         landmark_index: int = 9,  # 中指 MCP = 手掌中心(plan.md §4.3)
         duration: float = 0.3,
+        smooth_alpha: float = 0.35,   # u/v EMA 平滑系数(越小越稳,越大越跟手)
+        deadband_px: int = 10,        # 死区:平滑目标与上次发送差 < 该值不发送(防抖)
     ) -> None:
         self.orchestrator = orchestrator
         self.get_frame_jpeg_fn = get_frame_jpeg_fn
@@ -63,11 +74,18 @@ class HandFollower:
         self.model_path = Path(model_path) if model_path else DEFAULT_MODEL_PATH
         self.landmark_index = landmark_index
         self.duration = duration
+        self.smooth_alpha = min(max(smooth_alpha, 0.05), 1.0)
+        self.deadband_px = max(int(deadband_px), 0)
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._enabled_lock = threading.Lock()
         self._enabled = False
+
+        # 平滑状态(EMA)与防抖状态
+        self._smooth_u: float | None = None
+        self._smooth_v: float | None = None
+        self._last_sent: tuple[int, int] | None = None
 
         self._landmarker: Any | None = None
         self._available: bool = False
@@ -103,6 +121,10 @@ class HandFollower:
             self._enabled = False
         self._bus.update("hand_follow_enabled", False)
         self._bus.update("hand_visible", False)
+        # 清平滑/防抖状态:下次开启从当前检测值重新开始,不带历史惯性
+        self._smooth_u = None
+        self._smooth_v = None
+        self._last_sent = None
         logger.info("[HandFollower] disabled")
 
     def start(self) -> None:
@@ -257,6 +279,26 @@ class HandFollower:
         self._bus.update("hand_visible", True)
         self._bus.update("hand_uv", [u, v])
 
+        # 5b. 播报让位:Reachy 说话/播放时头部归 wobbler(特别动作),
+        #     检测照常更新 bus(徽章仍实时),但不驱动头部
+        if self._bus.get("status") in self._YIELD_STATES:
+            return
+
+        # 5c. EMA 平滑 + 死区防抖(15Hz 原始检测直接发会抖)
+        if self._smooth_u is None:
+            self._smooth_u, self._smooth_v = float(u), float(v)
+        else:
+            a = self.smooth_alpha
+            self._smooth_u = a * u + (1.0 - a) * self._smooth_u
+            self._smooth_v = a * v + (1.0 - a) * self._smooth_v
+        su, sv = int(self._smooth_u), int(self._smooth_v)
+        if self._last_sent is not None:
+            du = abs(su - self._last_sent[0])
+            dv = abs(sv - self._last_sent[1])
+            if du < self.deadband_px and dv < self.deadband_px:
+                return  # 死区内:不发送,减少关节指令抖动
+        self._last_sent = (su, sv)
+
         # 6. look_at_image(sim + real)
         if self.orchestrator is None:
             return
@@ -267,12 +309,12 @@ class HandFollower:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     asyncio.run_coroutine_threadsafe(
-                        self.orchestrator.look_at_image(u, v, self.duration),
+                        self.orchestrator.look_at_image(su, sv, self.duration),
                         loop,
                     )
                 else:
-                    asyncio.run(self.orchestrator.look_at_image(u, v, self.duration))
+                    asyncio.run(self.orchestrator.look_at_image(su, sv, self.duration))
             except RuntimeError:
-                asyncio.run(self.orchestrator.look_at_image(u, v, self.duration))
+                asyncio.run(self.orchestrator.look_at_image(su, sv, self.duration))
         except Exception as e:
             logger.debug(f"[hand-follower] look_at_image failed: {e}")
