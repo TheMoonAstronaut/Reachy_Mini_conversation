@@ -19,6 +19,9 @@
 时不播呼吸** —— 那时由音频 wobbler 驱动头部摆动作"特别动作";
 用户说话(listening)、语义分析(thinking)、空闲待机都播呼吸当底色动作。
 播放期间若用户发命令,当前段播完即停(工具的 set_target 立即接管)。
+
+P6 仲裁(2026-09-17):手部跟随生效(开关开 + 画面有手)时呼吸不新起段
+—— 跟随是前景动作,呼吸不与其叠加;手移出画面后 idle_after_s 恢复。
 """
 
 from __future__ import annotations
@@ -102,6 +105,18 @@ class BreathingMove(Move):
         return head_pose, antennas, 0.0
 
 
+def _hand_is_driving(snapshot: dict) -> bool:
+    """手部跟随是否正占用头部(开关开 且 画面里有手)。
+
+    P6 部署仲裁(2026-09-17):跟随生效时呼吸绝不新起段,否则 8s 呼吸段
+    与 15Hz look_at_image 同写头部打架。手移出画面(hand_visible=False)
+    后跟随自然停发,呼吸在 idle_after_s 后恢复。
+    """
+    return bool(snapshot.get("hand_follow_enabled")) and bool(
+        snapshot.get("hand_visible")
+    )
+
+
 class IdleBreathController:
     """空闲检测 + 呼吸播放调度(后台线程)。
 
@@ -133,6 +148,7 @@ class IdleBreathController:
         self._last_activity = time.monotonic()
         self._last_seen: dict[str, Any] = {}
         self._status: str = "idle"  # 上一轮 status(下降沿检测用)
+        self._hand_busy: bool = False  # 手部跟随占用头部(P6 仲裁)
 
     # ---------- 生命周期 ----------
     def start(self) -> None:
@@ -183,6 +199,12 @@ class IdleBreathController:
                 time.monotonic() - self._idle_after_s + self._post_speech_grace_s
             )
 
+        # 手部跟随占用头部 → 等同活动(刷新空闲计时 + 禁止新起段)。
+        # 跟随是"前景动作",呼吸是"底色动作",不叠加(见模块 docstring)。
+        self._hand_busy = _hand_is_driving(snap)
+        if self._hand_busy:
+            self._last_activity = time.monotonic()
+
     def _play_one_segment(self) -> None:
         """播一段 8s 呼吸(同步包装 async_play_move)。"""
         start_pose = None
@@ -215,6 +237,7 @@ class IdleBreathController:
                 idle_for >= self._idle_after_s
                 and not self._playing
                 and getattr(self, "_status", "idle") not in _BUSY_STATES
+                and not getattr(self, "_hand_busy", False)
             ):
                 logger.info(f"[idle-breath] 空闲 {idle_for:.0f}s → 呼吸一段")
                 try:

@@ -190,3 +190,57 @@ class TestIdleBreathController:
         ctl.start()
         ctl.stop()
         assert ctl._thread is None
+
+    def test_no_play_while_hand_follow_driving(self) -> None:
+        """手部跟随生效(开关开 + 有手)时不新起呼吸段 —— 头部归跟随(P6 仲裁)。
+
+        回归风险(2026-09-17 P6 部署):呼吸 8s 段与 15Hz look_at_image
+        同写头部打架;跟随是前景动作,呼吸是底色动作,不叠加。
+        """
+        target = _FakeTarget()
+        bus = get_state_bus()
+        bus.update("hand_follow_enabled", True)
+        bus.update("hand_visible", True)
+        ctl = IdleBreathController(target, idle_after_s=0.2, check_interval_s=0.05)
+        ctl.start()
+        try:
+            time.sleep(1.0)
+            assert not target.played, "跟随占用头部时呼吸不得新起段"
+            assert ctl._hand_busy is True
+        finally:
+            ctl.stop()
+
+    def test_breath_resumes_after_hand_leaves(self) -> None:
+        """手移出画面(跟随仍在开)后,空闲超时恢复呼吸。"""
+        target = _FakeTarget()
+        bus = get_state_bus()
+        bus.update("hand_follow_enabled", True)
+        bus.update("hand_visible", True)
+        ctl = IdleBreathController(target, idle_after_s=0.3, check_interval_s=0.05)
+        ctl.start()
+        try:
+            time.sleep(0.5)
+            assert not target.played
+            bus.update("hand_visible", False)  # 手离开画面
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and not target.played:
+                time.sleep(0.05)
+            assert target.played, "手离开后应恢复呼吸底色动作"
+        finally:
+            ctl.stop()
+
+    def test_play_when_follow_enabled_but_no_hand(self) -> None:
+        """开关开但画面无手(跟随空转)→ 呼吸照常播(底色动作不浪费)。"""
+        target = _FakeTarget()
+        bus = get_state_bus()
+        bus.update("hand_follow_enabled", True)
+        bus.update("hand_visible", False)
+        ctl = IdleBreathController(target, idle_after_s=0.3, check_interval_s=0.05)
+        ctl.start()
+        try:
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and not target.played:
+                time.sleep(0.05)
+            assert target.played, "无手时(跟随空转)应播呼吸"
+        finally:
+            ctl.stop()
