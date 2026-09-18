@@ -198,5 +198,15 @@ echo -e "${CYAN}  Reachy Mini Conversation 已启动${NC}"
 echo -e "${CYAN}============================================================${NC}"
 echo ""
 
+# 局域网访问提示(尽早输出,不等 python 侧 banner):同 WiFi 设备浏览器输入
+# 该链接即可。注意必须带 http:// 前缀 —— 部分手机浏览器输 IP 会默认
+# 升级 https,而本服务是 http,会报"连接不安全"(见 docs/TROUBLESHOOTING.md)。
+LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [[ -n "${LAN_IP}" && "${LAN_IP}" != "127.0.0.1" ]]; then
+    echo -e "${GREEN}[start]${NC} 本机访问:   http://localhost:7860"
+    echo -e "${GREEN}[start]${NC} 局域网访问: ${YELLOW}http://${LAN_IP}:7860${NC}  (同 WiFi 设备可打开,注意带 http:// 前缀)"
+    echo ""
+fi
+
 log "UI 模式(python -m reachymini_conversation --ui)"
 python -m reachymini_conversation --ui

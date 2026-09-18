@@ -73,6 +73,10 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 
 > ⚠️ 安全提示:局域网链接意味着**同网络的任何人都能控制机器人**,请只在
 > 可信 WiFi 下使用,不要在公共网络开放。
+>
+> 📱 手机浏览器输入链接时请**带 `http://` 前缀**(部分浏览器默认升级
+> https 会报"连接不安全")。打不开先查
+> [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) 第 0 节。
 
 **连接真机**:给 Reachy Mini 通电 → 顶栏点「⚡ 连接真机」(有线 USB 自动识别;无线版选下拉「真机+仿真(无线)」)。连接后语音对话、手部跟随、真机摄像头画面自动可用。
 
