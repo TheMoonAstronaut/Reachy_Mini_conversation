@@ -17,7 +17,6 @@ CLI:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import logging
 import sys
 import threading
@@ -356,14 +355,14 @@ class ConversationApp(ReachyMiniApp):
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="reachy-mini-conversation",
-        description=(
-            "Reachy Mini Conversation App\n--ui 启动 Web UI(P2 默认行为,左侧 Mujoco + 右侧对话)"
-        ),
+        description="Reachy Mini Conversation App(Web UI,左侧 Mujoco + 右侧对话)",
     )
+    # --ui 保留为兼容开关(start.sh 传参),默认即 UI 模式(legacy CLI 已移除)
     parser.add_argument(
         "--ui",
         action="store_true",
-        help="[P1+ 启用] 启动 Gradio Web UI(默认 0.0.0.0:7860)",
+        default=True,
+        help="启动 Gradio Web UI(默认 0.0.0.0:7860,已默认开启)",
     )
     parser.add_argument(
         "--real",
@@ -390,21 +389,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _delegate_to_legacy_main() -> int:
-    """无 --ui 时,委托给根目录 main.py(legacy CLI)。"""
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
-
-    import main as legacy_main
-
-    try:
-        asyncio.run(legacy_main.main())
-        return 0
-    except KeyboardInterrupt:
-        print("\n[reachy-mini-conversation] 用户中断 (Ctrl+C)")
-        return 130
-
-
 def main() -> int:
     args = _build_arg_parser().parse_args()
 
@@ -416,14 +400,9 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
 
-    # 无 --ui → legacy CLI
-    if not args.ui:
-        print("[reachy-mini-conversation] 未带 --ui,走 legacy CLI 模式")
-        return _delegate_to_legacy_main()
-
-    # P2 UI 模式
+    # UI 模式(唯一入口;legacy CLI 已随开源清理移除)
     print("=" * 60)
-    print("  Reachy Mini Conversation — P2 UI 模式")
+    print("  Reachy Mini Conversation — Web UI 模式")
     print("  Gradio:    http://localhost:7860")
     print("  MJPEG:     http://localhost:7861/sim_feed")
     print("=" * 60)

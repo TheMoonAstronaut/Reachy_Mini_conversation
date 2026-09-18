@@ -112,7 +112,7 @@ fi
 # -33dB(45%)。Seeed wiki 建议:所有控件保持 100%(PCM 输出可按需调)。
 # 注意:按名字探测 card 号(USB 重枚举后 card N 可能变化);只动
 #       Reachy Mini Audio 卡,不碰板载声卡;未接真机时静默跳过。
-# 另:pactl 默认输入源(板载活麦)也是运行时改动,暂未持久化,见 HANDOVER §三.1。
+# 另:pactl 默认输入源(板载活麦)也是运行时改动,重启机器后需重跑。
 setup_reachy_audio() {
     local card
     card="$(aplay -l 2>/dev/null | sed -n 's/^card \([0-9]\+\):.*Reachy Mini Audio.*/\1/p' | head -1)"
@@ -190,7 +190,7 @@ if [[ "$DAEMON_ONLY" == "true" ]]; then
     exit 0
 fi
 
-# ---------- 启动应用 ----------
+# ---------- 启动应用(UI 为唯一入口;legacy CLI 已随开源清理移除)----------
 log "启动 Reachy Mini Conversation..."
 echo ""
 echo -e "${CYAN}============================================================${NC}"
@@ -198,11 +198,5 @@ echo -e "${CYAN}  Reachy Mini Conversation 已启动${NC}"
 echo -e "${CYAN}============================================================${NC}"
 echo ""
 
-if [[ "$USE_UI" == "true" ]]; then
-    log "UI 模式(python -m reachymini_conversation --ui)"
-    python -m reachymini_conversation --ui
-else
-    warn "legacy CLI 模式已废弃(deprecated):请改用 ./scripts/start.sh --ui"
-    warn "仍要跑 legacy CLI,继续启动 main.py ..."
-    python main.py
-fi
+log "UI 模式(python -m reachymini_conversation --ui)"
+python -m reachymini_conversation --ui

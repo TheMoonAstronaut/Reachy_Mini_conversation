@@ -18,8 +18,6 @@ keywords = ["reachy-mini", "robot", "conversation", "asr", "llm", "gradio", "muj
 # 依赖列表 — 必须与 environment.yml + requirements.txt 保持一致
 # =============================================================================
 # SDK / 语音 / 视觉 / Web / 配置 五个分组
-# 添加新依赖前:在 agents.local.md §3 检查是否在 plan.md 范围内
-# 决策 6/13 变更(2025-09-09):移除 funasr(详见 agents.local.md §9)
 dependencies = [
     # ---- SDK ----
     "reachy_mini>=1.10.0",
@@ -64,12 +62,11 @@ dev = ["pytest", "black", "ruff", "mypy"]
 # Changelog = "https://github.com/<user>/reachy-mini-conversation/blob/main/CHANGELOG.md"
 
 # =============================================================================
-# CLI 入口(plan.md §3 / P0_TASKS.md P0.2)
+# CLI 入口
 # =============================================================================
-# 三个入口:
+# 两个入口:
 #   1. reachy-mini-conversation  — 推荐方式(包装 python -m)
 #   2. python -m reachymini_conversation  — 标准方式
-#   3. python main.py  — 兼容入口(P0 保留,P8 弃用)
 # =============================================================================
 [project.scripts]
 reachy-mini-conversation = "reachymini_conversation.app:main"
@@ -77,17 +74,11 @@ reachy-mini-conversation = "reachymini_conversation.app:main"
 # =============================================================================
 # 包发现
 # =============================================================================
-# 当前(P0.2):同时包含老的扁平布局子包 + 新的 reachymini_conversation/ 子包
-# P0.4 删除重复实现后,会收窄到只包含 reachymini_conversation/
-# =============================================================================
 [tool.setuptools.packages.find]
 where = ["."]
 include = [
     "reachymini_conversation",
     "reachymini_conversation.*",
-    "actions",
-    "audio_animation",
-    "profiles",
     "tools",
 ]
 exclude = [
@@ -110,19 +101,7 @@ target-version = ["py310", "py311", "py312"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-# Legacy 根目录文件(P0 兼容保留,P1+ 用 reachymini_conversation/ 子包)
-# P8 阶段:这些文件 lint 错误保留(后续 P+ 阶段逐步迁,不在 P8 阻塞)
 extend-exclude = [
-    "main.py",
-    "config.py",
-    "utils.py",
-    "audio.py",
-    "robot.py",
-    "brain.py",
-    "asr.py",
-    "tts.py",
-    "gradio_personality.py",
-    "__init__.py",  # root-level package init
     "docs/*",        # 文档里嵌入的代码片段
 ]
 

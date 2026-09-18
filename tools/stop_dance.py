@@ -31,7 +31,7 @@ class StopDance(Tool):
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> dict[str, Any]:
         logger.info("Tool call: stop_dance")
-        # P0.4:clear_move_queue 是 shim no-op;SDK play_move 不需要显式停止
+        # movement_manager 为 None(开源清理已移除 shim);SDK play_move 不需显式停止
         if deps.movement_manager is not None:
             deps.movement_manager.clear_move_queue()
         # 2026-09-18:dance 已后台线程化(_BG_PERFORM_TOOLS)。SDK move 不

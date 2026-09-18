@@ -1,15 +1,12 @@
-"""tests.smoke_test — P0 冒烟测试。
+"""tests.smoke_test — 冒烟测试。
 
 目标:不连真实 daemon、不连网络,只检查:
   1. SDK 核心 import
   2. 所有 pyproject deps 都能 import
   3. config 能加载默认 env.json(无文件时用默认值)
-  4. CLI shim 能输出帮助(注册成功)
-  5. tools 子包自动注册 5 个工具
-  6. actions.MovementManager shim 兼容接口
-  7. mediapipe 1.0+ 新 API 可用(P6 准备)
-
-P0.8 (P0_TASKS.md) + P0.10 兼容性验证 的合并版本。
+  4. CLI 能输出帮助(注册成功)
+  5. tools 子包自动注册
+  6. mediapipe 1.0+ 新 API 可用(手部跟随)
 """
 
 from __future__ import annotations
@@ -249,30 +246,7 @@ def test_tools_schemas_generated():
 
 
 # ============================================================================
-# 6. actions MovementManager 兼容 shim(P0.4 决策 7 安全网)
-# ============================================================================
-def test_movement_manager_shim():
-    """MovementManager 兼容接口(start/stop/set_speech_offsets/clear_move_queue)。"""
-    import actions
-
-    mm = actions.MovementManager(current_robot=None)
-    mm.start()
-    mm.stop()
-    mm.set_speech_offsets((0.0,) * 6)
-    mm.clear_move_queue()
-    mm.queue_move(move=None)  # 也 no-op
-
-
-def test_actions_pose_constants():
-    """NEUTRAL_POSE / SLEEP_POSE 导出。"""
-    import actions
-
-    assert actions.NEUTRAL_POSE is not None
-    assert actions.SLEEP_POSE is not None
-
-
-# ============================================================================
-# 7. 子包结构(P0.1 + P0.4 验证)
+# 6. 子包结构
 # ============================================================================
 def test_subpackage_skeleton():
     """reachymini_conversation 子包骨架完整。"""
@@ -284,13 +258,10 @@ def test_subpackage_skeleton():
 
 
 # ============================================================================
-# 8. 网络白名单(agents.local.md §4):无意外远程端点
+# 7. 网络白名单(config):无意外远程端点
 # ============================================================================
 def test_no_unexpected_remote_endpoints():
-    """agents.local.md §4 白名单:没有新增未声明的远程端点。
-
-    静态检查 asr.py + brain.py(主网络使用点)。
-    """
+    """config 白名单:ASR/LLM 端点与项目声明一致(静态检查,防回归改域名)。"""
     import config
 
     # ASR 必须在白名单

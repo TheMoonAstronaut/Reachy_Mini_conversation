@@ -109,7 +109,11 @@ def test_app_class_hierarchy():
 
 
 def test_arg_parser():
-    """_build_arg_parser 接受 --ui / --real / --preload-datasets / --head-poll-hz。"""
+    """_build_arg_parser 接受 --ui / --real / --preload-datasets / --head-poll-hz。
+
+    2026-09-18 开源清理:legacy CLI 移除,--ui 改为默认 True(--real/--preload
+    已不接线,保留参数仅为向后兼容 start.sh 传参)。
+    """
     from reachymini_conversation.app import _build_arg_parser
 
     parser = _build_arg_parser()
@@ -119,7 +123,7 @@ def test_arg_parser():
     assert args.head_poll_hz == 2.5
 
     args = parser.parse_args([])
-    assert args.ui is False
+    assert args.ui is True  # 默认即 UI 模式
     assert args.head_poll_hz == 1.0
 
 
