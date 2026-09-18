@@ -348,6 +348,164 @@ REACHY_CSS = """
   flex-wrap: wrap;
 }
 .rm-footer code { color: #8B98AB; }
+
+/* ============================================================
+   文字对比度治理(2026-09-18 用户实测"深底黑字 / 白底白字")
+   ------------------------------------------------------------
+   背景:REACHY_THEME 的部分变量在 Gradio 6 不落(body_text_color、
+   按钮面色等),未覆盖处回落到浏览器默认(黑字/白按钮),与深色面板
+   混排就出现两类对比度事故。主题变量名随 Gradio 版本漂移不可靠,
+   这里对用到的每种组件显式锁色:深色面 + 浅色字,语义色按钮保留。
+   ============================================================ */
+/* —— 全局基色:所有未单独设色的文本,深底浅字 —— */
+.gradio-container, .gradio-container .main, .gradio-container .wrap,
+.gradio-container .column, .gradio-container .row,
+.gradio-container .prose, .gradio-container .prose p,
+.gradio-container .prose li, .gradio-container .prose strong {
+  color: #D5DEE8;
+}
+/* 次级说明文字 */
+.gradio-container .prose em, .gradio-container em { color: #8B98AB; }
+/* inline code:深底灰字,防"白底白字" */
+.gradio-container code {
+  background: #1B2432;
+  color: #8B98AB;
+  border: 1px solid #2A3442;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* —— 按钮:Gradio 默认浅色面 → 锁深色面浅字;语义色按钮保留色相 —— */
+.gradio-container button {
+  color: #E6EDF3;
+}
+.gradio-container button.secondary {
+  background: #1B2432 !important;
+  border: 1px solid #2A3442 !important;
+  color: #D5DEE8 !important;
+}
+.gradio-container button.primary {
+  background: #D97706 !important;   /* 品牌橙(暗一档,白字可读) */
+  border: 1px solid #FF8C00 !important;
+  color: #FFFFFF !important;
+}
+.gradio-container button.stop {
+  background: #6E2C2C !important;   /* 深红面,不用刺眼亮红 */
+  border: 1px solid #F85149 !important;
+  color: #FFB3AE !important;
+}
+
+/* —— 下拉:内部 reference/arrow 等回落黑字 → 锁浅字 —— */
+.gradio-container .gradio-dropdown, .gradio-container .gradio-dropdown * {
+  color: #D5DEE8;
+}
+.gradio-container .gradio-dropdown .wrap, .gradio-container .gradio-dropdown .wrap-inner {
+  background: #151B24 !important;
+  border-color: #2A3442 !important;
+}
+
+/* —— 文本框:标签 + 输入 + 占位 —— */
+.gradio-container .gradio-textbox label span,
+.gradio-container .gradio-textbox .label-wrap span {
+  color: #8B98AB;
+}
+.gradio-container .gradio-textbox input,
+.gradio-container .gradio-textbox textarea {
+  background: #0F141C !important;
+  color: #E6EDF3 !important;
+  border-color: #2A3442 !important;
+}
+.gradio-container .gradio-textbox input::placeholder,
+.gradio-container .gradio-textbox textarea::placeholder {
+  color: #5B6779;
+}
+
+/* —— Gradio 6 组件块标签 chip(对话历史/语音输入/Reachy 语音播报等):
+   默认白底 chip 是"白底白字/浅底深字"事故重灾区 → 统一透明底灰字 —— */
+.gradio-container [data-testid="block-label"] {
+  background: transparent !important;
+  color: #8B98AB !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.gradio-container [data-testid="block-label"] span {
+  color: #8B98AB !important;
+}
+
+/* —— 单选(对话模式,Gradio 6 结构 fieldset.rm-chat-mode .wrap label):
+   默认白丸 → 深面浅字,选中项橙色描边 —— */
+.rm-chat-mode .wrap {
+  background: transparent !important;
+}
+.rm-chat-mode label[data-testid$="-radio-label"] {
+  background: #151B24 !important;
+  color: #D5DEE8 !important;
+  border: 1px solid #2A3442 !important;
+}
+.rm-chat-mode label.selected[data-testid$="-radio-label"] {
+  background: #1B2432 !important;
+  color: #FF8C00 !important;
+  border-color: #FF8C00 !important;
+}
+.rm-chat-mode label[data-testid$="-radio-label"] span {
+  color: inherit !important;
+}
+
+/* —— 文本框发送按钮:默认白圆 → 深色面橙字 —— */
+.gradio-container .submit-button {
+  background: #1B2432 !important;
+  color: #FF8C00 !important;
+  border: 1px solid #2A3442 !important;
+}
+
+/* —— 聊天窗:占位 / 气泡(Gradio 6 结构:.message-row.bubble
+   .message.bot|.user;气泡默认近白底 rgb(248,250,252),叠全局浅色字
+   规则 = 白底白字事故)→ 深底浅字 —— */
+/* (block-label 全局规则见上方单选区块) */
+.gradio-container .placeholder {
+  color: #5B6779 !important;
+}
+.gradio-container .message-row .message.bot {
+  background: #151B24 !important;
+  color: #D5DEE8 !important;
+  border: 1px solid #2A3442 !important;
+}
+.gradio-container .message-row .message.user {
+  background: #1B2432 !important;
+  color: #E6EDF3 !important;
+  border: 1px solid #2A3442 !important;
+}
+/* 气泡内 markdown 继承气泡色(防上方全局 .prose 浅色字规则串色) */
+.gradio-container .message-row .message.bot .md,
+.gradio-container .message-row .message.user .md,
+.gradio-container .message-row .message.bot .prose,
+.gradio-container .message-row .message.user .prose {
+  color: inherit !important;
+}
+
+/* —— 音频组件(录音/TTS/免提):浅面板 → 深面 —— */
+.gradio-container .rm-mic, .gradio-container .rm-tts {
+  background: #0F141C !important;
+}
+.gradio-container .rm-mic .label-wrap span,
+.gradio-container .rm-tts .label-wrap span,
+.gradio-container .rm-mic label,
+.gradio-container .rm-tts label {
+  color: #8B98AB !important;
+}
+
+/* —— Accordion 标签 —— */
+.gradio-container .gradio-accordion > .label-wrap span,
+.gradio-container .gradio-accordion .label span {
+  color: #C9D4E0 !important;
+}
+
+/* —— JSON(工具轨迹/开发者调试)—— */
+.gradio-container .gradio-json {
+  background: #0F141C !important;
+  color: #C9D4E0 !important;
+  border-color: #2A3442 !important;
+}
 """
 
 # ============================================================================
