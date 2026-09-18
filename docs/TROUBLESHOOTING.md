@@ -511,7 +511,7 @@ unixfd backport plugin, EGL vendor libs).
 
 ## Still stuck?
 
-1. 看 [`agents.local.md`](../agents.local.md) §2 决策表确认你是否偏离了决策
+1. 对照 README/设计文档确认配置是否偏离默认决策
 2. 看 [`plan.md`](../plan.md) §3 阶段规划确认当前阶段该有的功能
 3. 看 [`tests/smoke_test.py`](../tests/smoke_test.py) 跑 `pytest -v` 看哪些测试挂了
 4. 提 issue(待 P8 完善)

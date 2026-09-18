@@ -117,7 +117,7 @@ P3 之后,UI 设置面板可以在线修改 env.json。Python 端需要调 `conf
 
 写入时 `env_loader.py` 强制 `chmod 0600`(仅当前用户可读写):
 ```bash
--rw------- 1 seeed seeed 312 Sep 9 10:38 /home/seeed/.reachymini/env.json
+-rw------- 1 <user> <group> 312 ... ~/.reachymini/env.json
 ```
 
 敏感 API Key 文件强烈建议保持 0600 权限。

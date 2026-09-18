@@ -1,6 +1,6 @@
 # static/ — 静态资源目录
 
-> 原用途:HF Space 静态资源接口占位(agents.local.md 决策 8)。
+> 原用途:HF Space 静态资源接口占位(预留,当前不发布)。
 > **现扩展(2025-09-14,任务 V1)**:同时承载 three.js 3D 视图的本地资源,
 > 由 7861 端口的 FastAPI 通过 `StaticFiles` 挂载到 `/static/` 伺服,
 > 运行时零外网依赖(CDN 白名单不变)。

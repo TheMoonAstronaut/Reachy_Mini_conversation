@@ -2,14 +2,14 @@
 >
 > **项目代号**:`reachy-mini-conversation`(沿用)
 > **文档状态**:v1.0(2025-09-09 全部 8 阶段完成)
-> **决策锁定**:见 [`agents.local.md`](agents.local.md) + §9 变更日志
+> **决策锁定**:见 §9 变更日志(历史决策背景见仓库提交记录)
 > **当前阶段**:✅ P0-P7 完成(P8 收尾中)
 
 ---
 
 ## 1. 项目目标
 
-把现有 CLI 对话应用 `/home/seeed/Reachy_Mini_conversation` 升级为**完整 localhost Web 端**,新增 4 类能力:
+把 CLI 对话应用升级为**完整 localhost Web 端**,新增 4 类能力:
 
 1. **Web 端 + Mujoco 仿真 + 真机↔sim 实时镜像**
 2. **真实语音对话反馈**(豆包 LLM + **豆包 ASR WebSocket 流式** + Edge TTS)
@@ -20,7 +20,7 @@
 - 完全跳过 HF dataset 运行时调用(决策 16D 例外)
 - 开源到 GitHub,conda 一键配置
 - Windows 系统预留适配位置
-- **无线版兼容**(决策 6/13 变更 2025-09-09:不引入 torch / FunASR / 本地 ASR,详见 `agents.local.md §9`)
+- **无线版兼容**(2025-09-09 变更:不引入 torch / FunASR / 本地 ASR,语音识别走云端豆包流式 API)
 
 ---
 
@@ -89,9 +89,7 @@ Reachy_Mini_conversation/                   ← GitHub 公开仓库
 ├── pyproject.toml                         ← 包定义 + CLI 入口
 ├── README.md                              ← 中英双语,一键安装/启动
 ├── LICENSE                                ← Apache 2.0(SDK 一致)
-├── agents.local.md                        ← 用户决策 + 环境(本仓库包含示例)
 ├── plan.md                                ← 本文件
-├── P0_TASKS.md                            ← P0 详细任务清单
 ├── .env.example                           ← API Key 模板
 ├── .gitignore                             ← 排除敏感+临时
 ├── reachymini_conversation/                ← 代码包
@@ -211,7 +209,7 @@ Reachy_Mini_conversation/                   ← GitHub 公开仓库
 
 #### P0 — 基础设施与去史山(预计 1 天)
 
-详见 `P0_TASKS.md`。核心:
+P0 任务要点:
 - 仓库结构改造
 - pyproject.toml 补齐依赖
 - 删 `audio_animation/`(SDK `enable_wobbling` 已覆盖)
@@ -251,7 +249,7 @@ Reachy_Mini_conversation/                   ← GitHub 公开仓库
 - `StateBus` 广播:"listening" / "thinking" / "speaking" / "moving"
 - Web 端:状态徽章根据事件变色
 
-> **变更 2025-09-09**:原计划用 FunASR SenseVoiceSmall(本地),现改为豆包 ASR 云端 WebSocket 流式。原因见 `agents.local.md §9`。变更影响:
+> **变更 2025-09-09**:原计划用 FunASR SenseVoiceSmall(本地),现改为豆包 ASR 云端 WebSocket 流式。原因:避免 torch 依赖、保持无线版 RPi 兼容、降低集成复杂度。变更影响:
 > - ✅ 节省 ~750MB torch 依赖 + ~230MB FunASR 模型
 > - ✅ P0 不再需要装 funasr / funasr-onnx
 > - ✅ 现有 `asr.py` 的 `DoubaoASR` 实现复用,P4 主要工作是把它包成 `doubao_asr.py` 模块 + 接 StateBus
