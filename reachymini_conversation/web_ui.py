@@ -366,11 +366,14 @@ REACHY_CSS = """
 }
 /* 次级说明文字 */
 .gradio-container .prose em, .gradio-container em { color: #8B98AB; }
-/* inline code:深底灰字,防"白底白字" */
-.gradio-container code {
-  background: #1B2432;
-  color: #8B98AB;
-  border: 1px solid #2A3442;
+/* inline code:深底灰字,防"白底白字"(Gradio .prose code 主题规则
+   优先级更高,必须 !important + 更具体选择器) */
+.gradio-container code,
+.gradio-container .prose code,
+.gradio-container .prose pre code {
+  background: #1B2432 !important;
+  color: #8B98AB !important;
+  border: 1px solid #2A3442 !important;
   border-radius: 4px;
   padding: 0 4px;
 }
