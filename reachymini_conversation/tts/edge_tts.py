@@ -33,7 +33,9 @@ class EdgeTTS:
     def synthesize(self, text: str, output_file: str | None = None) -> str | None:
         """同步合成:返回 wav 文件路径,失败返回 None。
 
-        用 edge-tts CLI(subprocess)。
+        用 edge-tts CLI(subprocess)。带重试(2026-09-18 实测:到
+        speech.platform.bing.com 的 connect 间歇性失败,用户日志单轮
+        失败率 ~50%,一失败该轮就没声音)——最多 2 次尝试,单次超时 20s。
         """
         if not text or not text.strip():
             return None
@@ -53,27 +55,33 @@ class EdgeTTS:
             output_file,
         ]
 
-        try:
-            subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=30.0,
-            )
-            self._normalize_loudness(output_file)
-            logger.info(f"[TTS] Generated ({self.voice}): {output_file}")
-            return output_file
-        except subprocess.CalledProcessError as e:
-            logger.error(f"[TTS] edge-tts failed: {e.stderr[:200]}")
-            return None
-        except subprocess.TimeoutExpired:
-            logger.error(f"[TTS] edge-tts timeout (>30s) for text: {text[:50]}")
-            return None
-        except FileNotFoundError:
-            # edge-tts CLI 没装
-            logger.error("[TTS] edge-tts CLI not found; install via `pip install edge-tts`")
-            return None
+        last_err = ""
+        for attempt in (1, 2):
+            try:
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=20.0,
+                )
+                self._normalize_loudness(output_file)
+                logger.info(
+                    f"[TTS] Generated ({self.voice}, 第{attempt}次尝试): {output_file}"
+                )
+                return output_file
+            except subprocess.CalledProcessError as e:
+                last_err = (e.stderr or "")[:200]
+                logger.warning(f"[TTS] edge-tts 第{attempt}次失败: {last_err}")
+            except subprocess.TimeoutExpired:
+                last_err = f"timeout >20s (text: {text[:50]})"
+                logger.warning(f"[TTS] edge-tts 第{attempt}次超时")
+            except FileNotFoundError:
+                # edge-tts CLI 没装(重试无意义)
+                logger.error("[TTS] edge-tts CLI not found; install via `pip install edge-tts`")
+                return None
+        logger.error(f"[TTS] edge-tts 失败(已重试): {last_err}")
+        return None
 
     @staticmethod
     def _normalize_loudness(path: str) -> None:
