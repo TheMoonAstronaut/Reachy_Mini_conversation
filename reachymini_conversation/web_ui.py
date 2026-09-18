@@ -1619,21 +1619,32 @@ _VIEWER_3D_JS_ON_LOAD = f"""
 # ============================================================================
 _RM_LAN_JS = """
 window.__rmBase7861 = location.protocol + '//' + location.hostname + ':7861';
-function __rmFillFeeds(root) {
+window.__rmFillFeeds = function (root) {
   (root || document).querySelectorAll('img[data-rm-feed]').forEach(function (im) {
     if (!im.getAttribute('src')) {
       im.src = window.__rmBase7861 + im.dataset.rmFeed;
     }
   });
-}
-__rmFillFeeds(document);
-new MutationObserver(function (muts) {
-  muts.forEach(function (m) {
-    (m.addedNodes || []).forEach(function (n) {
-      if (n.nodeType === 1) __rmFillFeeds(n);
+};
+function __rmInitLanFeeds() {
+  window.__rmFillFeeds(document);
+  // observer 挂到 body;js 可能早于 body 存在,跳过则靠下方 setInterval 兜底
+  if (document.body && !window.__rmLanObserver) {
+    window.__rmLanObserver = new MutationObserver(function (muts) {
+      muts.forEach(function (m) {
+        (m.addedNodes || []).forEach(function (n) {
+          if (n.nodeType === 1) window.__rmFillFeeds(n);
+        });
+      });
     });
-  });
-}).observe(document.body, { childList: true, subtree: true });
+    window.__rmLanObserver.observe(document.body, { childList: true, subtree: true });
+  }
+}
+if (document.body) { __rmInitLanFeeds(); }
+else { document.addEventListener('DOMContentLoaded', __rmInitLanFeeds); }
+// 兜底扫描:任何原因(observer 失效/DOM 时序)漏填的 img,2s 内补上。
+// 已填的节点因 src 非空被跳过,开销可忽略(全页仅 1-3 个 data-rm-feed img)。
+setInterval(function () { window.__rmFillFeeds(document); }, 2000);
 """.strip()
 
 
