@@ -31,7 +31,7 @@ dependencies:
   - python-dotenv
 
   # ---------- 走 pip(mediapipe / av conda 版本滞后)----------
-  # 决策 6/13 变更(2025-09-09):移除 funasr,详见 agents.local.md §9
+  # funasr 已移除(避免 torch 依赖);ASR 走云端豆包流式 API
   - pip:
       # SDK
       - "reachy-mini>=1.10.0"

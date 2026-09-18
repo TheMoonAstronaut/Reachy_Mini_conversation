@@ -1,6 +1,6 @@
 """export_visual_manifest — 从 SDK 的 MJCF XML 导出 three.js 可视化清单(V1.2)。
 
-用途(方案 B:three.js 重渲染,HANDOVER_SESSION_5 §六 P0 V1):
+用途(方案 B:three.js 重渲染 Mujoco 画面,前端 three.js 交互视图):
   浏览器端 three.js 需要"哪些 STL 属于哪个刚体组、各自局部位姿是什么"。
   本脚本解析 reachy_mini.xml,把 visual geom 按运动学分组成 6 组,输出
   `static/meshes/manifest.json` + 复制引用到的 STL 到 `static/meshes/`。

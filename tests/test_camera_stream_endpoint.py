@@ -354,7 +354,7 @@ def test_generate_placeholder_jpeg_handles_pil_missing():
 # ============================================================================
 # P7.C guard:粘性 fallback / 慢初始化 race 修复的回归测试
 #
-# Bug 背景(复现数据见 HANDOVER):
+# Bug 背景(MJPEG 流 Content-Type 缺失导致浏览器黑屏):
 #   stats 原来只在 MJPEG 流生成器里更新 → 必须有浏览器 <img> 连着 /sim_feed
 #   才统计;而 UI tick 看到 available=false 就把 <img> 换成占位 HTML → 客户端
 #   断开 → 相机 ready 后也没客户端 → frames_received 永远 0 → UI 永久占位。

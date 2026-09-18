@@ -2,7 +2,7 @@
 
 V1 端到端浏览器验收(headless Chrome + SwiftShader 软件 WebGL)。
 
-验收点(HANDOVER_SESSION_5 §六 P0 V1):
+three.js 3D 视图 E2E 验收脚本:
   1. Gradio 7860 页面加载,js_on_load 执行,#reachy-3d-viewer 里出现 <canvas>
   2. WebSocket /ws/state 连上(角标 ".rm-3d-badge" 显示"已连接")
   3. 3D 真的渲染了(canvas 采样像素标准差 > 阈值,不是纯色)

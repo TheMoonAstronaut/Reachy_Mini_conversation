@@ -1,6 +1,6 @@
 # TROUBLESHOOTING.md — 故障排查 / Troubleshooting Guide
 
-> 决策记录:见 [`agents.local.md`](../agents.local.md)
+> 配套文档:[`INSTALL.md`](INSTALL.md) / [`CONFIG.md`](CONFIG.md)
 > 安装问题先看 [`INSTALL.md`](INSTALL.md)
 
 ---
@@ -374,7 +374,7 @@ curl -s http://localhost:7861/sim_feed_status   # frames_received 应 > 0 且增
 - **`Failed to create unixfdsink element`**:unixfd 插件 1.24 才进官方源码树。
   本机(GStreamer 1.20)已用 backport 插件修复,位于
   `~/.local/share/gstreamer-1.0/plugins/libgstunixfd.so`;
-  重装系统/换机时需重新构建(见 HANDOVER_SESSION_3.md §三)。
+  重装系统/换机时需重新构建(见本节上方的重建命令)。
 - **EGL 不可用**:`ls /usr/share/glvnd/egl_vendor.d/` 应有 `10_nvidia.json`;
   确认 `libnvidia-egl-*` 已装。必要时启动脚本里 `export MUJOCO_GL=egl`。
 - **daemon 的 central signaling relay 反复报 `Connect call failed ('127.0.0.1', 8443)`**:

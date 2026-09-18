@@ -1,6 +1,6 @@
 # CONFIG.md — 配置说明 / Configuration Reference
 
-> 决策记录:见 [`agents.local.md`](../agents.local.md) §2
+> 设计文档:[`plan.md`](../plan.md) / [`SPEC_V2.md`](../SPEC_V2.md)
 > 配置文件:`~/.reachymini/env.json`(用户级,Windows 对应 `%USERPROFILE%\.reachymini\env.json`)
 
 ---
@@ -129,7 +129,7 @@ P3 之后,UI 设置面板可以在线修改 env.json。Python 端需要调 `conf
 | Python 包依赖 | `pyproject.toml` | 改后 `pip install -e .` |
 | 系统原生依赖 | `scripts/install_deps.sh` | Linux only |
 | conda 环境 | `environment.yml` | 改后 `conda env update -f environment.yml` |
-| 行为开关(决策 1-16) | `agents.local.md` | 冻结,变更要走 §8 流程 |
+| 行为决策(运行模式/VAD/工具语义等) | `plan.md` / `SPEC_V2.md` | 设计文档,变更需同步更新 |
 
 ---
 
@@ -192,6 +192,6 @@ P3+ will add an in-UI settings panel that calls `config.reload_config()`. Until 
 
 ## Related
 
-- Network egress whitelist: [`agents.local.md`](../agents.local.md) §4
-- Locked decisions: [`agents.local.md`](../agents.local.md) §2
+- Network egress whitelist: README「网络白名单」一节(4 类远程端点)
+- Design docs: [`plan.md`](../plan.md) / [`SPEC_V2.md`](../SPEC_V2.md)
 - Troubleshooting: [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)

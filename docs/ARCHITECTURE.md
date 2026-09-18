@@ -1,7 +1,6 @@
 # ARCHITECTURE.md — 架构说明 / Architecture Reference
 
-> 完整规划见 [`plan.md`](../plan.md)
-> 决策记录:见 [`agents.local.md`](../agents.local.md)
+> 设计文档:[`plan.md`](../plan.md) / [`SPEC_V2.md`](../SPEC_V2.md)
 
 ---
 
@@ -78,7 +77,6 @@
 | **edge_tts** | `reachymini_conversation/tts/edge_tts.py` | 现有 `tts.py` 模块化 | P4 |
 | **config** | `config.py` | 读 `~/.reachymini/env.json` | **P0 ✅** |
 | **env_loader** | `reachymini_conversation/utils/env_loader.py` | env.json 加载 / 保存 / 校验 | **P0 ✅** |
-| **movement shim** | `actions/movement.py` | MovementManager 兼容 shim(P0.4) | **P0 ✅** |
 | **camera_stream** | `reachymini_conversation/utils/camera_stream.py` | MJPEG FastAPI 推流 | P2 |
 
 ### 数据流(一次语音轮次)
@@ -261,9 +259,8 @@ Reachy_Mini_conversation/                   ← GitHub 公开仓库
 ├── pyproject.toml                         ← 包定义 + CLI 入口
 ├── README.md                              ← 中英双语 ✅
 ├── LICENSE                                ← Apache 2.0 ✅
-├── agents.local.md                        ✅
-├── plan.md                                ✅
-├── P0_TASKS.md                            ✅
+├── plan.md                                ✅ 设计文档
+├── SPEC_V2.md                             ✅ 设计文档
 ├── .env.example                           ✅
 ├── .gitignore                             ✅
 ├── reachymini_conversation/                ← 代码包(P0.1 建骨架)
@@ -285,15 +282,9 @@ Reachy_Mini_conversation/                   ← GitHub 公开仓库
 │   ├── tts/                               ← P4
 │   │   ├── __init__.py
 │   │   └── edge_tts.py
-│   ├── profiles/
-│   │   └── default/
 │   └── utils/
 │       ├── env_loader.py                  ✅
 │       └── camera_stream.py               ← P2
-├── actions/                                ← P0.4 简化 ✅
-│   ├── __init__.py
-│   ├── movement.py                        ← shim ✅
-│   └── poses.py
 ├── tools/                                  ← P0.4 精简 ✅
 │   ├── core_tools.py
 │   ├── dance.py
@@ -313,12 +304,12 @@ Reachy_Mini_conversation/                   ← GitHub 公开仓库
 │   ├── ARCHITECTURE.md                    ← 本文
 │   └── TROUBLESHOOTING.md
 └── tests/
-    └── smoke_test.py                      ✅(18 tests)
+    └── smoke_test.py                      ✅(冒烟)
 ```
 
 ### 架构约束(决策一致性)
 
-- **网络白名单**(agents.local.md §4):只允许 5 个端点:`ark.cn-beijing.volces.com` / `openspeech.bytedance.com` / `speech.platform.bing.com` / `modelscope.cn`(FunASR 已不用)/ `huggingface.co`(决策 16D)
+- **网络白名单**:只允许 4 类远程端点 —— 豆包 LLM(`ark.cn-beijing.volces.com`)/ 豆包 ASR(`openspeech.bytedance.com`)/ Edge TTS(`speech.platform.bing.com`)/ HF emotions dataset(`huggingface.co`,仅首次)
 - **零 torch**(无线版 RPi 兼容)
 - **零本地 ASR**(决策 13 变更后)
 - **API Key 不入 git**(决策 7 + 约束 7)
@@ -373,31 +364,25 @@ See Chinese section above for the full diagram.
 
 ### Architecture invariants
 
-- Network whitelist: only the 5 endpoints in `agents.local.md` §4
+- Network whitelist: only the remote endpoints declared in README(4 类,见中文版)
 - Zero torch (RPi compatibility)
 - Zero local ASR (decision 13)
 - API keys never committed (constraint 7)
 
-### Phase roadmap
+### 路线图 / Roadmap
 
-| Phase | What |
-|---|---|
-| P0 | **Infrastructure + cleanup (in progress)** |
-| P1 | App base + Gradio Blocks |
-| P2 | Mode switch + Mujoco feed + mirroring |
-| P3 | Chat panel + API key config |
-| P4 | Doubao ASR voice pipeline |
-| P5 | Sound localization |
-| P6 | Hand following |
-| P7 | Full LLM tool calls |
-| P8 | Windows + CI |
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| P0–P2 | 基础设施 + App 骨架 + Web UI + 仿真镜像 | ✅ 完成 |
+| P3–P4 | 对话面板 + 豆包 ASR 语音管线 | ✅ 完成 |
+| P5–P7 | 声源定位 + 手部跟随 + LLM 工具调用 | ✅ 完成 |
+| P8 | Windows 完整适配 + CI 强化 | 🟡 预留(脚本模板已就位) |
 
 ---
 
 ## Related
 
-- Full plan: [`plan.md`](../plan.md)
-- Decisions: [`agents.local.md`](../agents.local.md)
+- Design docs: [`plan.md`](../plan.md) / [`SPEC_V2.md`](../SPEC_V2.md)
 - Install: [`INSTALL.md`](INSTALL.md)
 - Config: [`CONFIG.md`](CONFIG.md)
 - Troubleshooting: [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
