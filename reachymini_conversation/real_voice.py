@@ -87,9 +87,14 @@ class RealVoiceLoop:
 
     # ---------- 主循环 ----------
     def _should_listen(self, bus: Any) -> bool:
+        # pure_real(on-robot):真机实例在 sim_mini 位,无独立 real_mini
+        real_ready = (
+            self._orch.real_mini is not None
+            or self._orch.run_mode == "pure_real"
+        )
         return (
-            self._orch.run_mode == "real_plus_sim"
-            and self._orch.real_mini is not None
+            self._orch.run_mode in ("real_plus_sim", "pure_real")
+            and real_ready
             and bus.get("chat_mode", "text") == "voice"
         )
 
@@ -241,7 +246,10 @@ def make_tts_audio_router(orchestrator_getter: Any):
             from reachy_mini.io.protocol import SetSpeechOffsetsCmd, SetWobblingCmd
 
             orch = orchestrator_getter()
+            # pure_real(on-robot)下真机实例在 sim_mini 位
             mini = getattr(orch, "real_mini", None) if orch else None
+            if mini is None and orch is not None and orch.run_mode == "pure_real":
+                mini = orch.sim_mini
             if mini is None:
                 return
 
@@ -266,9 +274,17 @@ def make_tts_audio_router(orchestrator_getter: Any):
 
         target = None
         local_audio = None
-        if orch.run_mode == "real_plus_sim" and orch.real_mini is not None:
+        if orch.run_mode in ("real_plus_sim", "pure_real") and (
+            orch.real_mini is not None or orch.run_mode == "pure_real"
+        ):
             bus = get_state_bus()
-            if bus.get("real_conn_type", "wired") == "wireless":
+            # pure_real(on-robot):真机即 sim_mini 位,音频走本地声卡
+            # (机器人扬声器在树莓派上是本地 USB 声卡,与有线模式同款路径)
+            if orch.run_mode == "pure_real":
+                from reachymini_conversation.local_audio import get_local_audio
+
+                local_audio = get_local_audio()
+            elif bus.get("real_conn_type", "wired") == "wireless":
                 target = orch.real_mini
             else:
                 from reachymini_conversation.local_audio import get_local_audio

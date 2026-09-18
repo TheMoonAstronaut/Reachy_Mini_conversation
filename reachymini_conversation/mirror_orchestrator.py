@@ -6,6 +6,9 @@
 运行模式(run_mode,来自 config.RUN_MODE):
   - "pure_sim"      - 只 sim
   - "real_plus_sim" - sim + real 镜像
+  - "pure_real"     - 只真机,无 sim(on-robot 模式:app 跑在无线版机身
+                      树莓派上,wrapped_run 连的本体 daemon 即真机,
+                      实例放在 sim_mini 位供既有代码路径复用)
 
 镜像方法(plan.md §4.1):
   - goto_target / set_target / play_move / look_at_image / look_at_world
@@ -28,7 +31,7 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-RunMode = Literal["pure_sim", "real_plus_sim"]
+RunMode = Literal["pure_sim", "real_plus_sim", "pure_real"]
 
 
 class MirrorOrchestrator:

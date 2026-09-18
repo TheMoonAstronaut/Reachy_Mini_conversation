@@ -14,6 +14,7 @@ P3 改造点(待做):
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +100,10 @@ def _build_tts_config() -> dict[str, Any]:
 BRAIN_CONFIG: dict[str, Any] = _build_brain_config()
 ASR_CONFIG: dict[str, Any] = _build_asr_config()
 TTS_CONFIG: dict[str, Any] = _build_tts_config()
-RUN_MODE: str = _env.get("run_mode", DEFAULT_ENV["run_mode"])
+RUN_MODE: str = os.environ.get(
+    "REACHYMINI_RUN_MODE",
+    _env.get("run_mode", DEFAULT_ENV["run_mode"]),
+)
 HF_PRELOAD_DATASETS: bool = bool(
     _env.get("hf_preload_datasets", DEFAULT_ENV["hf_preload_datasets"])
 )
@@ -156,7 +160,7 @@ def _self_check() -> None:
         logger.warning(
             "ASR api_key 未配置(豆包 WebSocket 流式,需要 .reachymini/env.json 填 doubao_asr.api_key)。"
         )
-    if RUN_MODE not in {"pure_sim", "real_plus_sim"}:
+    if RUN_MODE not in {"pure_sim", "real_plus_sim", "pure_real"}:
         logger.warning(f"RUN_MODE='{RUN_MODE}' 不在白名单内,应为 pure_sim | real_plus_sim")
 
 

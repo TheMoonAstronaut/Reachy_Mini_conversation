@@ -250,6 +250,12 @@ class ModeManager:
             {"ok": bool, "run_mode": str, "error": str | None}
         """
         with self._lock:
+            if self._orch.run_mode == "pure_real":
+                return {
+                    "ok": False,
+                    "run_mode": self._orch.run_mode,
+                    "error": "on-robot 模式(纯本体)不支持运行时切换,请重启进程更换启动方式",
+                }
             if mode == self._orch.run_mode:
                 return {"ok": True, "run_mode": mode, "error": None}
             if mode == "real_plus_sim":

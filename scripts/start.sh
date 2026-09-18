@@ -56,6 +56,7 @@ USE_UI=false
 PRELOAD_DATASETS=false
 DAEMON_ONLY=false
 NO_MEDIA=false
+ROBOT_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -64,8 +65,9 @@ while [[ $# -gt 0 ]]; do
         --preload-datasets)  PRELOAD_DATASETS=true; shift ;;
         --daemon-only)       DAEMON_ONLY=true; shift ;;
         --no-media)          NO_MEDIA=true; shift ;;
+        --robot)             ROBOT_MODE=true; shift ;;
         -h|--help)
-            echo "用法: $0 [--real] [--ui] [--preload-datasets] [--daemon-only] [--no-media]"
+            echo "用法: $0 [--real] [--ui] [--preload-datasets] [--daemon-only] [--no-media] [--robot]"
             echo ""
             echo "  --real               真机 + 仿真镜像模式"
             echo "  --ui                 启动 Web UI(python -m reachymini_conversation --ui)"
@@ -73,6 +75,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --daemon-only        只启动 daemon,不启动应用"
             echo "  --no-media           降级模式:daemon 禁用全部媒体(相机/音频),"
             echo "                       sim 视频流不可用,仅媒体链路故障时排障用"
+            echo "  --robot              on-robot 模式:跑在无线版机身树莓派上,"
+            echo "                       不启动 sim daemon,直连本体官方 daemon(:8000),"
+            echo "                       局域网内任意设备打开 UI 控制"
             echo "  -h, --help           显示帮助"
             exit 0
             ;;
@@ -138,56 +143,69 @@ setup_reachy_audio
 #   3) --headless 时补回 eye_camera→5005 渲染线程(SDK 把"弹窗"和"推流"
 #      绑在同一个 `if not headless` 里,patch 把两者解耦)。
 # 因此 --headless 只表示"无原生 MuJoCo 弹窗",视频流(5005/5006)都保留。
-DAEMON_FLAGS="--sim --headless"
-if [[ "$NO_MEDIA" == "true" ]]; then
-    DAEMON_FLAGS="$DAEMON_FLAGS --no-media"
-    warn "--no-media:daemon 禁用相机/音频,sim 视频流将不可用(UI 显示占位图)"
-fi
-if [[ "$PRELOAD_DATASETS" == "true" ]]; then
-    DAEMON_FLAGS="$DAEMON_FLAGS --preload-datasets"
-    warn "决策 16D:首次启动会从 HF 下载 emotions dataset(~100MB)"
-fi
-
-log "启动 daemon(launcher 方案 B):python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS"
-# 守护进程后台跑,日志到 /tmp/reachy-daemon.log
-python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS > /tmp/reachy-daemon.log 2>&1 &
-DAEMON_PID=$!
-log "Daemon PID: $DAEMON_PID,日志:tail -f /tmp/reachy-daemon.log"
-
-# 等 daemon 起好:轮询 HTTP API 直到就绪(固定 sleep 3 不够 ——
-# daemon 的 lifespan 要完成 mujoco 加载 + wake_up 才接受连接,
-# 约 10~20s;app 过早连接会 fallback 到 reachy-mini.local 然后崩)
-log "等待 daemon 就绪(轮询 http://127.0.0.1:8000/api/daemon/status)..."
-DAEMON_READY=false
-for _ in $(seq 1 60); do
-    if curl -sf -m 2 "http://127.0.0.1:8000/api/daemon/status" >/dev/null 2>&1; then
-        DAEMON_READY=true
-        break
-    fi
-    # daemon 进程挂了就不用等了
-    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-        err "daemon 进程提前退出,日志见 /tmp/reachy-daemon.log"
+# --robot(on-robot)模式:跳过 sim daemon,直连机器人本体官方 daemon(:8000)。
+if [[ "$ROBOT_MODE" == "true" ]]; then
+    export REACHYMINI_RUN_MODE=pure_real
+    log "on-robot 模式:检查机器人本体 daemon(:8000,官方系统服务)…"
+    if ! curl -sf --max-time 5 http://127.0.0.1:8000/api/daemon/status > /dev/null 2>&1; then
+        err "本体 daemon 未就绪。请在树莓派上确认官方 daemon 服务在运行:"
+        err "  systemctl status reachy-mini-daemon(或按官方文档排查)"
         exit 1
     fi
-    sleep 1
-done
-if [[ "$DAEMON_READY" != "true" ]]; then
-    err "等待 daemon 就绪超时(60s),日志见 /tmp/reachy-daemon.log"
-    exit 1
-fi
-log "daemon 已就绪"
+    log "本体 daemon 已就绪(不启动 sim daemon)"
+    DAEMON_PID=""
+else
+    DAEMON_FLAGS="--sim --headless"
+    if [[ "$NO_MEDIA" == "true" ]]; then
+        DAEMON_FLAGS="$DAEMON_FLAGS --no-media"
+        warn "--no-media:daemon 禁用相机/音频,sim 视频流将不可用(UI 显示占位图)"
+    fi
+    if [[ "$PRELOAD_DATASETS" == "true" ]]; then
+        DAEMON_FLAGS="$DAEMON_FLAGS --preload-datasets"
+        warn "决策 16D:首次启动会从 HF 下载 emotions dataset(~100MB)"
+    fi
 
-cleanup() {
-    log "关闭 daemon (PID $DAEMON_PID)..."
-    kill "$DAEMON_PID" 2>/dev/null || true
-    wait "$DAEMON_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
+    log "启动 daemon(launcher 方案 B):python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS"
+    # 守护进程后台跑,日志到 /tmp/reachy-daemon.log
+    python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS > /tmp/reachy-daemon.log 2>&1 &
+    DAEMON_PID=$!
+    log "Daemon PID: $DAEMON_PID,日志:tail -f /tmp/reachy-daemon.log"
 
-if [[ "$DAEMON_ONLY" == "true" ]]; then
-    log "仅 daemon 模式已启动。Ctrl+C 退出。"
-    wait "$DAEMON_PID"
-    exit 0
+    # 等 daemon 起好:轮询 HTTP API 直到就绪(固定 sleep 3 不够 ——
+    # daemon 的 lifespan 要完成 mujoco 加载 + wake_up 才接受连接,
+    # 约 10~20s;app 过早连接会 fallback 到 reachy-mini.local 然后崩)
+    log "等待 daemon 就绪(轮询 http://127.0.0.1:8000/api/daemon/status)..."
+    DAEMON_READY=false
+    for _ in $(seq 1 60); do
+        if curl -sf -m 2 "http://127.0.0.1:8000/api/daemon/status" >/dev/null 2>&1; then
+            DAEMON_READY=true
+            break
+        fi
+        # daemon 进程挂了就不用等了
+        if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+            err "daemon 进程提前退出,日志见 /tmp/reachy-daemon.log"
+            exit 1
+        fi
+        sleep 1
+    done
+    if [[ "$DAEMON_READY" != "true" ]]; then
+        err "等待 daemon 就绪超时(60s),日志见 /tmp/reachy-daemon.log"
+        exit 1
+    fi
+    log "daemon 已就绪"
+
+    cleanup() {
+        log "关闭 daemon (PID $DAEMON_PID)..."
+        kill "$DAEMON_PID" 2>/dev/null || true
+        wait "$DAEMON_PID" 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+
+    if [[ "$DAEMON_ONLY" == "true" ]]; then
+        log "仅 daemon 模式已启动。Ctrl+C 退出。"
+        wait "$DAEMON_PID"
+        exit 0
+    fi
 fi
 
 # ---------- 启动应用(UI 为唯一入口;legacy CLI 已随开源清理移除)----------

@@ -912,6 +912,9 @@ def build_ui() -> gr.Blocks:
                         {"role": "assistant", "content": vt.get("reply") or "(无回复)"},
                     ]
                     chatbot_update = history
+            mode_dropdown_update: Any = gr.update()
+            if run_mode == "pure_real":
+                mode_dropdown_update = gr.update(interactive=False)
             return {
                 status_pill: _render_status(snap),
                 mode_pill: _render_run_mode(
@@ -928,6 +931,7 @@ def build_ui() -> gr.Blocks:
                 eye_feed_html: eye_html,
                 eye_feed_status_md: eye_status_md_text,
                 chatbot: chatbot_update,
+                mode_dropdown: mode_dropdown_update,
             }
 
         timer.tick(
@@ -947,6 +951,7 @@ def build_ui() -> gr.Blocks:
                 eye_feed_html,
                 eye_feed_status_md,
                 chatbot,
+                mode_dropdown,  # pure_real 时禁用(不支持运行时切模式)
             ],
         )
 
@@ -1417,6 +1422,8 @@ def _render_status(snapshot: dict[str, Any]) -> str:
 def _render_run_mode(run_mode: str, real_connecting: bool = False) -> str:
     if real_connecting:
         return '<span class="pill pill--busy">🟠 连接真机中…</span>'
+    if run_mode == "pure_real":
+        return '<span class="pill pill--accent">🤖 机器人本体模式(on-robot)</span>'
     if run_mode == "pure_sim":
         cls, icon = "pill--ok", "🧪"
     else:
