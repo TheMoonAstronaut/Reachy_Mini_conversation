@@ -354,10 +354,14 @@ def create_camera_stream_app(
         real_src = real_mini
 
     if real_src is not None:
+        # LAN 延迟优化(2026-09-18):真机推流 8fps(副视角是监控视角,不需
+        # 要高帧率),帧体积缩到 720p 后 8fps ≈ 6.4Mbps,WiFi 双向空口下
+        # 延迟抖动大幅减小;sim 流保持 target_fps(浏览器本地/局域网均可)。
+        real_feed_interval = 1.0 / 8.0
         app.add_api_route(
             "/camera_feed",
             make_mjpeg_endpoint(
-                real_src, frame_interval, label="real",
+                real_src, real_feed_interval, label="real",
                 fallback_jpeg_factory=lambda: generate_placeholder_jpeg(
                     "真机相机未就绪\nUSB 相机未插入或初始化中\n(real 模式插入真机后自动出现)"
                 ),

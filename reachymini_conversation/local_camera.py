@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 
 # v4l2 by-id 名字特征(Sunplus 的 Reachy 眼睛相机)
 DEVICE_ID_PATTERN = "Reachy_Mini_Camera"
-# MJPEG 直出,浏览器 <img>/MJPEG 链零转码;分辨率取相机自协商(1080p MJPEG@60 在列)
+# 输出为 JPEG bytes(首选 1080p 采集 + 管线内缩 720p,候选链见
+# UsbEyeCamera._PIPELINE_CANDIDATES;分辨率经 caps 显式协商)
 PIPELINE_FMT = "image/jpeg"
 
 
@@ -62,14 +63,24 @@ class UsbEyeCamera:
     STALE_S = 5.0           # 运行中无帧判定掉线的阈值
     CAPTURE_HZ = 30.0       # 抓帧线程目标频率(相机实际帧率会进一步约束)
 
-    # 视频流协商偏好(2026-09-18 帧率/延迟优化):相机默认自协商到 4K(每帧
-    # ~1MB,MJPEG 推给浏览器 ~14MB/s,WiFi 下延迟大、卡顿)。而消费端用不到
-    # 4K —— 副视角 UI 显示宽仅 ~570px,手部跟随检测降到 640 宽。优先锁
-    # 1080p@60(相机枚举实测支持:v4l2-ctl --list-formats-ext),带宽降一个
-    # 数量级;协商失败回退相机默认(行为同旧版)。
-    _PIPELINE_CAPS_CANDIDATES = (
-        "image/jpeg,width=1920,height=1080,framerate=60/1",
-        "image/jpeg",
+    # 视频流协商偏好(2026-09-18 帧率/延迟优化,两轮迭代):
+    # 相机默认自协商到 4K(每帧 ~1MB,MJPEG 推给浏览器 ~110Mbps,WiFi 下
+    # 延迟大、卡顿)。第一轮锁 1080p@60 直出(241KB/帧,110→27Mbps),本机
+    # 流畅但局域网客户端(WiFi 双向空口争抢)仍延迟明显。
+    # 第二轮:管线内 GStreamer jpegdec→videoscale→jpegenc 缩到 720p
+    # (~100KB/帧),相机端 1080p60 解码+720p15 编码 CPU 开销可控(单核
+    # ~25%,仅管线活着时)。副视角 UI 显示宽 ~570px、手部跟随检测降到
+    # 640 宽,720p 绰绰有余。逐候选尝试,全部失败回退纯 image/jpeg
+    # (旧 4K 行为),保证任何环境可跑。
+    _PIPELINE_CANDIDATES = (
+        # (v4l2src caps, 附加元素, appsink 前 caps)
+        (
+            "image/jpeg,width=1920,height=1080,framerate=60/1",
+            "jpegdec ! videoscale ! jpegenc",
+            "image/jpeg,width=1280,height=720",
+        ),
+        ("image/jpeg,width=1920,height=1080,framerate=60/1", "", ""),
+        ("image/jpeg", "", ""),
     )
 
     def __init__(self, device: str | None = None) -> None:
@@ -100,7 +111,7 @@ class UsbEyeCamera:
                 self._open_pipeline(device)
                 self._running = True
                 self._last_frame_at = time.monotonic()
-                logger.info(f"[usb-eye] 已开 {device}(MJPEG 直出)")
+                logger.info(f"[usb-eye] 已开 {device}")
             except Exception as e:
                 logger.warning(f"[usb-eye] 打开 {device} 失败: {type(e).__name__}: {e}")
                 self._close_pipeline()
@@ -202,28 +213,32 @@ class UsbEyeCamera:
 
         Gst.init(None)
         self._GST = Gst
-        # MJPEG 直出:appsink 拿到即 JPEG,无需 jpegdec。按 _PIPELINE_CAPS_
-        # CANDIDATES 顺序协商(首选 1080p@60,失败回退相机默认),全失败抛错
+        # MJPEG 直出(或轻量重编码):appsink 拿到的都是 JPEG bytes。
+        # 按 _PIPELINE_CANDIDATES 顺序协商(首选 1080p 相机 + 管线内缩
+        # 720p),parse_launch/PLAYING 失败自动回退下一候选,全失败抛错
         # 交 start() 的自愈重试。
         last_err: Exception | None = None
-        for caps in self._PIPELINE_CAPS_CANDIDATES:
-            desc = (
-                f'v4l2src device="{device}" ! {caps} '
-                f"! appsink name=eye-sink drop=true max-buffers=2 sync=false"
-            )
+        for src_caps, middle, sink_caps in self._PIPELINE_CANDIDATES:
+            parts = [f'v4l2src device="{device}" ! {src_caps}']
+            if middle:
+                parts.append(f"! {middle}")
+            if sink_caps:
+                parts.append(f"! {sink_caps}")
+            parts.append("! appsink name=eye-sink drop=true max-buffers=2 sync=false")
+            desc = " ".join(parts)
             try:
                 self._pipe = Gst.parse_launch(desc)
                 self._appsink = self._pipe.get_by_name("eye-sink")
                 ret = self._pipe.set_state(Gst.State.PLAYING)
                 if ret == Gst.StateChangeReturn.FAILURE:
-                    raise RuntimeError(f"pipeline 启动失败(caps={caps})")
-                logger.info(f"[usb-eye] 管线已开 {device}(caps: {caps})")
+                    raise RuntimeError(f"pipeline 启动失败({src_caps})")
+                logger.info(f"[usb-eye] 管线已开 {device}(方案: {src_caps} | {middle or '直出'})")
                 return
             except Exception as e:
                 last_err = e
-                logger.warning(f"[usb-eye] caps={caps} 协商失败: {e}")
+                logger.warning(f"[usb-eye] 方案({src_caps} | {middle or '直出'})协商失败: {e}")
                 self._close_pipeline()
-        raise RuntimeError(f"所有 caps 候选均失败: {last_err}")
+        raise RuntimeError(f"所有管线候选均失败: {last_err}")
 
     def _close_pipeline(self) -> None:
         if self._pipe is not None:
