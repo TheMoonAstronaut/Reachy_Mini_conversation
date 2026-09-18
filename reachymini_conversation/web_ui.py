@@ -540,7 +540,7 @@ STATE_ERROR = "error"
 # ============================================================================
 _RUN_MODE_PURE_SIM = "🧪 纯仿真"
 _RUN_MODE_REAL_WIRED = "🤖 真机+仿真(有线)"
-_RUN_MODE_REAL_WIRELESS = "🌐 真机+仿真(无线)"
+_RUN_MODE_REAL_WIRELESS = "🌐 真机+仿真(无线·暂不支持相机/手部跟随)"
 _RUN_MODE_CHOICES = [_RUN_MODE_PURE_SIM, _RUN_MODE_REAL_WIRED, _RUN_MODE_REAL_WIRELESS]
 
 
