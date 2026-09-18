@@ -198,13 +198,12 @@ def create_camera_stream_app(
 
     # V1.1/V1.2:Gradio(7860)页面里的 three.js 要从本 app(7861)跨源拉
     # STL/JS/WS 初始帧 —— 放开 7860 来源的 GET 跨域(WS 不受 CORS 约束,
-    # 但 script/fetch 受)。仅本地回环,无安全风险。
+    # 但 script/fetch 受)。LAN 访问(2026-09-18):同一 WiFi 下其他设备用
+    # http://<PC局域网IP>:7860 打开 UI,origin 主机部分是局域网 IP,必须用
+    # 正则放行"任意主机的 7860 端口"。仅 GET 静态资源/流,无凭证,风险可控。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:7860",
-            "http://127.0.0.1:7860",
-        ],
+        allow_origin_regex=r"^http://[^\s/:]+:7860$",
         allow_methods=["GET"],
         allow_headers=["*"],
     )

@@ -162,7 +162,9 @@ async function pollOnce(baseUrl) {
  * @param {{ baseUrl: string }} opts
  */
 export function mount(root, opts) {
-  const { baseUrl } = opts;
+  // LAN 访问(2026-09-18):未显式传 baseUrl 时,跟随当前页面主机(局域网 IP
+  // 打开时不能回落到 localhost —— 那是设备自己)
+  const baseUrl = ((opts && opts.baseUrl) ?? `${location.protocol}//${location.hostname}:7861`).replace(/\/$/, '');
   pillEl = root.querySelector(`#${PILL_ID}`);
   if (!pillEl) {
     // 调用方 HTML 没带 pill 容器时自建一个(防御)

@@ -66,6 +66,14 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 
 启动后浏览器打开 [http://localhost:7860](http://localhost:7860)。
 
+**局域网访问**:UI 监听 `0.0.0.0`,同一 WiFi 下的手机/平板/其他电脑直接用
+`http://<本机局域网IP>:7860` 打开即可(启动时控制台会打印,如
+`http://192.168.x.x:7860`);视频流、3D 视图、语音播报会自动跟随访问用
+的 IP,无需任何配置。
+
+> ⚠️ 安全提示:局域网链接意味着**同网络的任何人都能控制机器人**,请只在
+> 可信 WiFi 下使用,不要在公共网络开放。
+
 **连接真机**:给 Reachy Mini 通电 → 顶栏点「⚡ 连接真机」(有线 USB 自动识别;无线版选下拉「真机+仿真(无线)」)。连接后语音对话、手部跟随、真机摄像头画面自动可用。
 
 **语音对话**:对话面板切到「🎤 语音(免提)」→ 真机模式直接对机器人说话(机器人麦克风收音、扬声器播音);仿真模式用浏览器麦克风,声音从电脑音箱出。
@@ -195,6 +203,10 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 ```
 
 Then open [http://localhost:7860](http://localhost:7860).
+
+**LAN access**: the UI listens on `0.0.0.0` — any phone / tablet / laptop on the same WiFi can open `http://<this-PC's-LAN-IP>:7860` directly (printed in the startup banner). Video feeds, the 3D view and TTS autoplay automatically follow whatever host was used to open the page — zero configuration.
+
+> ⚠️ **Security note**: a LAN link means **anyone on the same network can control the robot**. Use only on trusted WiFi.
 
 **Connect the real robot**: power it on → click "⚡ 连接真机" in the top bar (wired USB auto-detected; wireless: pick "真机+仿真(无线)" in the dropdown).
 

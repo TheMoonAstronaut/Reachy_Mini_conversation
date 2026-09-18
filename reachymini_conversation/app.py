@@ -33,7 +33,12 @@ from reachymini_conversation.mirror_orchestrator import MirrorOrchestrator
 from reachymini_conversation.sound_localizer import SoundLocalizer
 from reachymini_conversation.state_bus import get_state_bus
 from reachymini_conversation.utils.camera_stream import create_camera_stream_app
-from reachymini_conversation.web_ui import REACHY_CSS, REACHY_THEME, build_ui
+from reachymini_conversation.web_ui import (  # noqa: E402
+    REACHY_CSS,
+    REACHY_THEME,
+    _RM_LAN_JS as REACHY_LAN_JS,
+    build_ui,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,13 +277,14 @@ class ConversationApp(ReachyMiniApp):
         logger.info("[P2] Launching Gradio UI @ http://localhost:7860")
         self._demo = build_ui()
         try:
-            # B2:主题/CSS 统一由 launch() 注入(Gradio 6.0 起 theme/css 从
-            #     Blocks 构造器移到 launch(),放 Blocks 会触发 deprecation 警告)
+            # B2:主题/CSS/JS 统一由 launch() 注入(Gradio 6.0 起 theme/css/js
+            #     从 Blocks 构造器移到 launch(),放 Blocks 会触发 deprecation 警告)
             self._demo.launch(
                 server_name="0.0.0.0",
                 server_port=7860,
                 theme=REACHY_THEME,
                 css=REACHY_CSS,
+                js=REACHY_LAN_JS,
                 prevent_thread_lock=True,
                 show_error=True,
                 quiet=False,
@@ -389,6 +395,28 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _lan_urls() -> list[str]:
+    """本机局域网 IPv4 列表(用于启动横幅提示同 WiFi 访问链接)。
+
+    UDP connect 不发包,只是借路由表选出对外网卡地址;无网卡/离线时返回空。
+    """
+    import socket
+
+    ips: list[str] = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))  # 无实际流量
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                ips.append(ip)
+        finally:
+            s.close()
+    except OSError:
+        pass
+    return ips
+
+
 def main() -> int:
     args = _build_arg_parser().parse_args()
 
@@ -403,7 +431,9 @@ def main() -> int:
     # UI 模式(唯一入口;legacy CLI 已随开源清理移除)
     print("=" * 60)
     print("  Reachy Mini Conversation — Web UI 模式")
-    print("  Gradio:    http://localhost:7860")
+    print("  本机:      http://localhost:7860")
+    for ip in _lan_urls():
+        print(f"  局域网:    http://{ip}:7860   (同 WiFi 设备可访问)")
     print("  MJPEG:     http://localhost:7861/sim_feed")
     print("=" * 60)
 

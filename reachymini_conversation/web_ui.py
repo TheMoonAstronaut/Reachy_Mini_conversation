@@ -615,8 +615,8 @@ def build_ui() -> gr.Blocks:
             # ---- 左:视频区 ----
             with gr.Column(scale=3, elem_classes=["rm-pane"]):
                 # V1 主区:three.js 交互式 3D 视图(方案 B)
-                # 数据:ws://localhost:7861/ws/state @25Hz(关节 + head_pose)
-                # 资源:http://localhost:7861/static/(manifest + STL + three.js)
+                # 数据:ws://<页面主机>:7861/ws/state @25Hz(关节 + head_pose)
+                # 资源:<页面主机>:7861/static/(manifest + STL + three.js)
                 # 交互:左键旋转 / 右键平移 / 滚轮缩放(OrbitControls,对齐 MuJoCo viewer)
                 gr.HTML(
                     '<div class="rm-section-title">🦾 Reachy 3D · 交互视图'
@@ -1471,18 +1471,32 @@ def _mjpeg_img_html(
 
     max_height:图片最大显示高度(等比缩放,不裁剪)。主区副视角用 320 限高,
     否则 640x480 流在宽列里撑到 480px+,左右列严重失衡(2026-09-17 UI 调优)。
+
+    LAN 访问(2026-09-18):src 由浏览器侧填充(window.__rmBase7861 + 路径)——
+    同一 WiFi 下其他设备用 http://<PC局域网IP>:7860 打开时,7861 的流必须
+    跟着走局域网 IP,写死 localhost 会让那些设备去连它们自己。填充逻辑在
+    _RM_LAN_JS(经 launch(js=...) 注入,MutationObserver 覆盖 Timer 重渲染)。
+    这里只输出占位属性 data-rm-feed(留空 src,防浏览器对空 src 发请求)。
     """
-    src = url if available else ""
-    onerror = (
-        f'onerror="var s=this;setTimeout(function(){{'
-        f"s.src='{url}?t='+Date.now();}},2000);\""
-        if src
-        else ""
-    )
+    feed_path = url.replace("http://localhost:7861", "")  # 存相对路径,宿主由 JS 拼
+    if available:
+        # data-rm-feed 由 _RM_LAN_JS 在浏览器侧填 src(局域网 IP 跟随);
+        # onerror 自愈:2s 后带 cache-busting 重连
+        img_tag = (
+            f'<img data-rm-feed="{feed_path}" style="max-width:100%;max-height:{max_height}px;'
+            f'display:block;" alt="{alt}"\n'
+            f'       onerror="var s=this;setTimeout(function(){{'
+            f"s.src=window.__rmBase7861+s.dataset.rmFeed+'?t='+Date.now();}},2000);\" />"
+        )
+    else:
+        # 流不可用:留空 src(不发请求),占位由容器黑底承担
+        img_tag = (
+            f'<img src="" style="max-width:100%;max-height:{max_height}px;'
+            f'display:block;" alt="{alt}" />'
+        )
     return f"""
 <div style="background:#000;border:1px solid #2A3442;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:{min_height}px;">
-  <img src="{src}" style="max-width:100%;max-height:{max_height}px;display:block;" alt="{alt}"
-       {onerror} />
+  {img_tag}
 </div>
 """.strip()
 
@@ -1504,13 +1518,17 @@ def _scene_feed_html(*, scene_available: bool) -> str:
 # 7861 /api/tts_state,(path, mtime) 变化即 fetch /api/tts_audio 解码播放。
 # `?v=` 版本号防 ES module 强缓存(同 _VIEWER_JS_VERSION 教训,改了记得 bump)。
 # ============================================================================
-_TTS_AUTOPLAY_JS_VERSION = "20260915b"
+_TTS_AUTOPLAY_JS_VERSION = "20260918a"
 
+# LAN 访问(2026-09-18):7861 资源基址在浏览器侧从 location 推导(同 WiFi
+# 下其他设备用 http://<PC局域网IP>:7860 打开时,写死 localhost 会连到设备
+# 自己)。服务端不知道客户端用的主机名,只能浏览器侧拼。
 _TTS_AUTOPLAY_JS_ON_LOAD = f"""
 (async () => {{
   try {{
-    const mod = await import('http://localhost:7861/static/js/tts_autoplay.js?v={_TTS_AUTOPLAY_JS_VERSION}');
-    mod.mount(element, {{ baseUrl: 'http://localhost:7861' }});
+    const base = location.protocol + '//' + location.hostname + ':7861';
+    const mod = await import(base + '/static/js/tts_autoplay.js?v={_TTS_AUTOPLAY_JS_VERSION}');
+    mod.mount(element, {{ baseUrl: base }});
   }} catch (e) {{
     console.error('[reachy-tts] 自动播放模块加载失败:', e);
     const pill = element.querySelector('#reachy-tts-autoplay-pill');
@@ -1564,14 +1582,16 @@ _VIEWER_3D_CONTAINER_ID = "reachy-3d-viewer"
 #   失败时容器内显示可读错误(例如 7861 没起 / 没跑 export_visual_manifest)。
 #   `?v=` 版本号:浏览器对 ES module 有强缓存,改 JS 后不硬刷新会拿旧版
 #   (2025-09-15 教训:连杆改动用户看不到)。每次改 viewer 记得 bump。
-_VIEWER_JS_VERSION = "20260915b"
+_VIEWER_JS_VERSION = "20260918a"
 
 _VIEWER_3D_JS_ON_LOAD = f"""
 (async () => {{
   const container = element.querySelector('#{_VIEWER_3D_CONTAINER_ID}') || element;
   try {{
-    const mod = await import('http://localhost:7861/static/js/three_viewer.js?v={_VIEWER_JS_VERSION}');
-    await window.ReachyViewer.mount(container, {{ baseUrl: 'http://localhost:7861' }});
+    // LAN 访问:7861 基址浏览器侧推导(局域网 IP 打开时不能写死 localhost)
+    const base = location.protocol + '//' + location.hostname + ':7861';
+    const mod = await import(base + '/static/js/three_viewer.js?v={_VIEWER_JS_VERSION}');
+    await window.ReachyViewer.mount(container, {{ baseUrl: base }});
   }} catch (e) {{
     console.error('[reachy-3d] 加载失败:', e);
     container.innerHTML =
@@ -1582,6 +1602,38 @@ _VIEWER_3D_JS_ON_LOAD = f"""
       'tools/export_visual_manifest.py</span></div>';
   }}
 }})();
+""".strip()
+
+
+# ============================================================================
+# LAN 访问(2026-09-18):7861 资源基址 + MJPEG 视频流 img 的浏览器侧填充
+# ----------------------------------------------------------------------------
+# 背景:Gradio 已监听 0.0.0.0,同 WiFi 设备用 http://<PC局域网IP>:7860 即可
+# 打开 UI;但前端所有 7861 引用(视频流/静态 JS/WS)若写死 localhost,那些
+# 设备会去连它们自己。方案:
+#   1. 所有 7861 URL 改为浏览器侧用 location.hostname 拼(本文件 JS 常量
+#      与 static/js 默认值同步改);
+#   2. MJPEG <img>(data-rm-feed 占位)由本脚本统一填 src —— Timer 每秒
+#      重渲染 HTML,用 MutationObserver 兜住新插入的节点。
+# 经 app.py launch(js=...) 注入(Gradio 6:js 与 theme/css 一样在 launch)。
+# ============================================================================
+_RM_LAN_JS = """
+window.__rmBase7861 = location.protocol + '//' + location.hostname + ':7861';
+function __rmFillFeeds(root) {
+  (root || document).querySelectorAll('img[data-rm-feed]').forEach(function (im) {
+    if (!im.getAttribute('src')) {
+      im.src = window.__rmBase7861 + im.dataset.rmFeed;
+    }
+  });
+}
+__rmFillFeeds(document);
+new MutationObserver(function (muts) {
+  muts.forEach(function (m) {
+    (m.addedNodes || []).forEach(function (n) {
+      if (n.nodeType === 1) __rmFillFeeds(n);
+    });
+  });
+}).observe(document.body, { childList: true, subtree: true });
 """.strip()
 
 

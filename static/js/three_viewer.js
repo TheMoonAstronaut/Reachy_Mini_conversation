@@ -179,7 +179,13 @@ export function buildRobotRig(manifest, { loadGeometry, materialFor }) {
  * @returns {Promise<{dispose: () => void}>}
  */
 export async function createReachyViewer(container, opts = {}) {
-  const baseUrl = (opts.baseUrl ?? 'http://localhost:7861').replace(/\/$/, '');
+  // LAN 访问(2026-09-18):默认 baseUrl 从当前页面主机推导 —— 同一 WiFi 下
+  // 其他设备用 http://<PC局域网IP>:7860 打开时,7861 资源必须跟着走局域网 IP,
+  // 不能写死 localhost(那是设备自己)。调用方(web_ui js_on_load)会显式传
+  // baseUrl,这里只兜默认值。
+  const baseUrl = (
+    opts.baseUrl ?? `${location.protocol}//${location.hostname}:7861`
+  ).replace(/\/$/, '');
   const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws/state';
 
   // ---------- renderer / scene / camera(Z-up)----------
