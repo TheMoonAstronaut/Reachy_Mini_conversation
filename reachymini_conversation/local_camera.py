@@ -60,7 +60,17 @@ class UsbEyeCamera:
 
     RETRY_INTERVAL_S = 3.0  # 未就绪时的重探测节流
     STALE_S = 5.0           # 运行中无帧判定掉线的阈值
-    CAPTURE_HZ = 20.0       # 抓帧线程目标频率(相机实际帧率会进一步约束)
+    CAPTURE_HZ = 30.0       # 抓帧线程目标频率(相机实际帧率会进一步约束)
+
+    # 视频流协商偏好(2026-09-18 帧率/延迟优化):相机默认自协商到 4K(每帧
+    # ~1MB,MJPEG 推给浏览器 ~14MB/s,WiFi 下延迟大、卡顿)。而消费端用不到
+    # 4K —— 副视角 UI 显示宽仅 ~570px,手部跟随检测降到 640 宽。优先锁
+    # 1080p@60(相机枚举实测支持:v4l2-ctl --list-formats-ext),带宽降一个
+    # 数量级;协商失败回退相机默认(行为同旧版)。
+    _PIPELINE_CAPS_CANDIDATES = (
+        "image/jpeg,width=1920,height=1080,framerate=60/1",
+        "image/jpeg",
+    )
 
     def __init__(self, device: str | None = None) -> None:
         self._device = device  # None → 每次 start 时探测
@@ -192,16 +202,28 @@ class UsbEyeCamera:
 
         Gst.init(None)
         self._GST = Gst
-        # MJPEG 直出:appsink 拿到即 JPEG,无需 jpegdec
-        desc = (
-            f'v4l2src device="{device}" ! {PIPELINE_FMT} '
-            f"! appsink name=eye-sink drop=true max-buffers=2 sync=false"
-        )
-        self._pipe = Gst.parse_launch(desc)
-        self._appsink = self._pipe.get_by_name("eye-sink")
-        ret = self._pipe.set_state(Gst.State.PLAYING)
-        if ret == Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError("pipeline 启动失败")
+        # MJPEG 直出:appsink 拿到即 JPEG,无需 jpegdec。按 _PIPELINE_CAPS_
+        # CANDIDATES 顺序协商(首选 1080p@60,失败回退相机默认),全失败抛错
+        # 交 start() 的自愈重试。
+        last_err: Exception | None = None
+        for caps in self._PIPELINE_CAPS_CANDIDATES:
+            desc = (
+                f'v4l2src device="{device}" ! {caps} '
+                f"! appsink name=eye-sink drop=true max-buffers=2 sync=false"
+            )
+            try:
+                self._pipe = Gst.parse_launch(desc)
+                self._appsink = self._pipe.get_by_name("eye-sink")
+                ret = self._pipe.set_state(Gst.State.PLAYING)
+                if ret == Gst.StateChangeReturn.FAILURE:
+                    raise RuntimeError(f"pipeline 启动失败(caps={caps})")
+                logger.info(f"[usb-eye] 管线已开 {device}(caps: {caps})")
+                return
+            except Exception as e:
+                last_err = e
+                logger.warning(f"[usb-eye] caps={caps} 协商失败: {e}")
+                self._close_pipeline()
+        raise RuntimeError(f"所有 caps 候选均失败: {last_err}")
 
     def _close_pipeline(self) -> None:
         if self._pipe is not None:
