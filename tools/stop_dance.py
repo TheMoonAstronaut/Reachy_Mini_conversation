@@ -34,4 +34,9 @@ class StopDance(Tool):
         # P0.4:clear_move_queue 是 shim no-op;SDK play_move 不需要显式停止
         if deps.movement_manager is not None:
             deps.movement_manager.clear_move_queue()
-        return {"status": "stop signal sent"}
+        # 2026-09-18:dance 已后台线程化(_BG_PERFORM_TOOLS)。SDK move 不
+        # 支持中途取消,stop 语义 = "不再起下一个"(同原始设计);这里仅
+        # 汇报后台线程是否仍在跑,便于 LLM 组织回复。
+        from tools.core_tools import is_tool_running
+
+        return {"status": "stop signal sent", "dance_running": is_tool_running("dance")}

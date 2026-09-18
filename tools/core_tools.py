@@ -138,10 +138,64 @@ def _safe_load_obj(args_json: str) -> dict[str, Any]:
         return {}
 
 
+# 表演类工具(2026-09-18 响应延迟治理):这些工具执行的是"机器人表演动作"
+# (dance/表情/待机摇摆/转头),底层 async_play_move 会阻塞到动作播完
+# (实测 idle_sway×3 cycles ≈ 24s,dance 10-20s)。用户日志证据:ASR 文本
+# → 工具调用 → TTS 合成 间隔最大 39s,其中绝大部分是动作阻塞 —— 语音
+# 回复被排在动作之后,感知为"思考等待过久"。
+# 改为后台 daemon 线程执行(线程内 asyncio.run):LLM 轮次立即拿到
+# "started" 继续出回复,TTS 合成与动作并行。
+# 兼容性依据:idle_breath 控制器早就用"独立线程 + asyncio.run"驱动
+# 同一套 MirroredToolTarget/SDK async_play_move(2026-09-16 起生产验证);
+# 而 asyncio.create_task 不行 —— real_voice/web_ui 每轮 run_audio/run_text
+# 都新建临时 loop(asyncio.run),turn 结束 loop 即销毁,task 会被连坐。
+# 代价:动作与播报 wobbler 可能短暂并发写头部(daemon 仲裁),观感问题
+# 若出现再治理;响应速度优先。SDK move 不支持中途取消(stop_dance 语义
+# 本来就是"不再起下一个")。
+_BG_PERFORM_TOOLS = frozenset(
+    {"dance", "play_emotion", "idle_sway", "move_head", "look_at_sound"}
+)
+# 同名后台线程注册表:同工具上一个还在跑时,新调用直接跳过(防叠跳)
+_BG_THREADS: dict[str, "threading.Thread"] = {}
+
+
+def _run_tool_background(tool_name: str, tool: Any, args: dict[str, Any], deps: ToolDependencies) -> dict[str, Any]:
+    """把表演类工具放入后台 daemon 线程,立即返回 started(见上方注释)。"""
+    import threading
+
+    old = _BG_THREADS.get(tool_name)
+    if old is not None and old.is_alive():
+        logger.info("[tool-bg] %s 仍在执行,跳过重复调用", tool_name)
+        return {"status": "already_running", "message": f"{tool_name} 正在执行中"}
+
+    def _worker() -> None:
+        try:
+            result = asyncio.run(tool(deps, **args))
+            logger.info("[tool-bg] %s 后台执行完成: %s", tool_name, str(result)[:120])
+        except asyncio.CancelledError:
+            logger.info("[tool-bg] %s 后台任务被取消", tool_name)
+        except Exception as e:
+            logger.exception("[tool-bg] %s 后台执行失败: %s", tool_name, e)
+
+    th = threading.Thread(target=_worker, daemon=True, name=f"tool-bg-{tool_name}")
+    _BG_THREADS[tool_name] = th
+    th.start()
+    return {"status": "started", "message": f"{tool_name} 已在后台开始执行"}
+
+
+def is_tool_running(tool_name: str) -> bool:
+    """指定工具是否有后台任务在跑(stop_dance 等状态查询用)。"""
+    t = _BG_THREADS.get(tool_name)
+    return t is not None and t.is_alive()
+
+
 async def _dispatch_tool_call(tool_name: str, args: dict[str, Any], deps: ToolDependencies) -> dict[str, Any]:
     tool = ALL_TOOLS.get(tool_name)
     if not tool:
         return {"error": f"unknown tool: {tool_name}"}
+    # 表演类工具后台化(见 _BG_PERFORM_TOOLS 注释)
+    if tool_name in _BG_PERFORM_TOOLS:
+        return _run_tool_background(tool_name, tool, args, deps)
     try:
         return await tool(deps, **args)
     except asyncio.CancelledError:
