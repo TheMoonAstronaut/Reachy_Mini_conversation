@@ -1505,7 +1505,7 @@ def _scene_feed_html(*, scene_available: bool) -> str:
     """主区:MuJoCo 场景流(studio_close 第三人称,640x640)。"""
     return _mjpeg_img_html(
         url="http://localhost:7861/scene_feed",
-        alt="MuJoCo scene feed (studio_close)",
+        alt="⏳ MuJoCo 场景画面加载中…",
         available=scene_available,
     )
 
@@ -1653,7 +1653,7 @@ def _sim_feed_html(*, sim_available: bool) -> str:
     """副视角(sim):机器人眼睛相机流(eye_camera,1280x720),限高 320。"""
     return _mjpeg_img_html(
         url="http://localhost:7861/sim_feed",
-        alt="Reachy eye camera feed",
+        alt="⏳ 机器人眼睛画面加载中…",
         available=sim_available,
         min_height=180,
         max_height=320,
@@ -1672,7 +1672,7 @@ def _eye_feed_html(*, run_mode: str, eye_available: bool) -> str:
         return SIM_FEED_FALLBACK_HTML
     return _mjpeg_img_html(
         url="http://localhost:7861/camera_feed",
-        alt="Real robot camera feed",
+        alt="⏳ 真机摄像头画面加载中…(长时间不显示见 TROUBLESHOOTING)",
         available=True,
         min_height=180,
         max_height=320,

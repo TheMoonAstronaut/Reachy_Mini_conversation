@@ -34,6 +34,20 @@
 > 说明:本项目是局域网 HTTP 服务,不做 TLS(自签证书在每台设备上都要
 > 手动信任,体验更差)。只在可信 WiFi 下使用。
 
+### 0.5 视频区显示"⏳ …加载中…"替代文本 / 画面长时间不出
+
+`<img>` 的 alt 文本只在**请求未出图**时显示。真机摄像头(`/camera_feed`)
+从请求到首帧的典型时序:相机未开时 MJPEG 端先吐占位图(约 3s),相机
+热插拔自愈重探测节流 3s → 正常 **10s 内**应出真画面。持续不出按序查:
+
+1. 终端日志 `grep -i "usb-eye" <启动日志>`:`已开 ... (MJPEG 直出)` =
+   管线正常;`未找到 Reachy 相机` = USB 没插好;`打开 ... 失败` =
+   设备被别的进程占用(`lsof /dev/v4l/by-id/*Reachy*` 找出来杀掉)
+2. 单独验证相机:`python -c "from reachymini_conversation.local_camera import    UsbEyeCamera; c=UsbEyeCamera(); c.start(); import time; time.sleep(3);    print('frames ok' if c.get_frame_jpeg() else 'no frames'); c.stop()"`
+3. 本机直接拉流验证:`curl -m 5 http://localhost:7861/camera_feed | wc -c`
+   数值大(>10KB)= 服务端正常,问题在浏览器缓存 → **Ctrl+Shift+R 硬刷新**
+4. 改过前端后必须硬刷新(ES module 有强缓存,版本号防不住的页面 HTML 本身)
+
 ### 1. conda 装不上 / 创建环境失败
 
 #### 症状
