@@ -91,7 +91,7 @@ class ConversationApp(ReachyMiniApp):
         bus.update_many({"status": "running", "error": None})
 
         # 1. MirrorOrchestrator(P2 决策 9)
-        #    单一 sim 实例(P2 暂未启用 real;--real 时再加)
+        #    单一 sim 实例(P2 暂未启用 real;--real 走 real_plus_sim)
         run_mode = _root_config.RUN_MODE  # 来自根目录 config.RUN_MODE
         # 决策 3:默认 sim;--real 走 real_plus_sim
         self._orchestrator = MirrorOrchestrator(
@@ -100,6 +100,19 @@ class ConversationApp(ReachyMiniApp):
             run_mode=run_mode,
         )
         bus.update("run_mode", run_mode)
+
+        # 电机使能(2026-09-20 树莓派实测):官方 daemon 启动后电机控制模式默认
+        # Disabled(daemon 日志 "Motor control mode: Disabled"),必须客户端显式
+        # enable_motors 才能动 —— 官方 App 自动做,我们此前没调,表现为"daemon
+        # 没启动起来"(state=running 但 backend not ready)。有线/无线/on-robot
+        # 凡真机接入均需要;enable_motors 幂等,重复调用无害。失败只告警不阻塞
+        # (纯仿真模式的 mujoco backend 无真实电机,调用也无意义故跳过)。
+        if run_mode in ("real_plus_sim", "pure_real"):
+            try:
+                reachy_mini.enable_motors()
+                logger.info("[motors] enable_motors() 已发送(官方 daemon 默认 Disabled)")
+            except Exception as e:
+                logger.warning(f"[motors] enable_motors 失败(电机可能仍不可用): {e}")
 
         # 2. 后台 head poller(P1)
         logger.info(f"[P2] Starting head poller @ {self.head_poll_hz} Hz")
