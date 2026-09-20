@@ -69,6 +69,15 @@ DEFAULT_MODEL_PATH = Path.home() / ".cache" / "reachymini" / "hand_landmarker.ta
 
 # MediaPipe 可用性探测缓存(on-robot 刚需,见 _mediapipe_usable)
 _MP_PROBE_MARKER = Path.home() / ".cache" / "reachymini" / "mp_probe_ok"
+# 失败也缓存:CM4 上每次启动重跑探测(子进程 import mediapipe + 创建/销毁
+# landmarker ≈15s 且内存峰值大)浪费资源且徒增 OOM 风险;失败后同样落标记,
+# 除非模型/环境变更(手动删标记文件)不再重试。
+_MP_PROBE_FAILED_MARKER = Path.home() / ".cache" / "reachymini" / "mp_probe_failed"
+
+
+def _mediapipe_probe_mark_failed() -> None:
+    _MP_PROBE_FAILED_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    _MP_PROBE_FAILED_MARKER.touch()
 
 
 def _mediapipe_usable(model_path: Path) -> bool:
@@ -80,13 +89,16 @@ def _mediapipe_usable(model_path: Path) -> bool:
     create_from_options 经 ctypes 加载 .so 时整个进程被 SIGILL 炸掉。
     SIGILL 是进程级致命信号,try/except 无法捕获,会把整个 app 拖死;
     而手部跟随是可选增强,绝不许拖死主应用。故:
-      - 首次启动用子进程跑完整创建流程,探活结果缓存到 mp_probe_ok
-        标记文件(成功后以后启动秒过,不重跑);
+      - 首次启动用子进程跑完整创建流程,探活结果缓存到 mp_probe_ok /
+        mp_probe_failed 标记文件(成功与失败都缓存,以后启动秒过,
+        不重跑探测;删除标记文件可强制重探);
       - 探测失败(非零返回/超时)→ 判定不可用,HandFollower 优雅降级
         (available=False,UI 显"不可用"),app 其余功能不受影响。
     """
     if _MP_PROBE_MARKER.exists():
         return True
+    if _MP_PROBE_FAILED_MARKER.exists():
+        return False
     import subprocess
     import sys
 
@@ -114,6 +126,7 @@ def _mediapipe_usable(model_path: Path) -> bool:
         )
     except Exception as e:
         logger.warning(f"[HandFollower] MediaPipe 探测异常: {e}")
+    _mediapipe_probe_mark_failed()
     return False
 
 
