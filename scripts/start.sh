@@ -175,7 +175,20 @@ if [[ "$ROBOT_MODE" == "true" ]]; then
         err "  systemctl status reachy-mini-daemon(或按官方文档排查)"
         exit 1
     fi
-    log "本体 daemon 已就绪(不启动 sim daemon)"
+    # 自动唤醒(2026-09-20 固化):机器人静置后 daemon 回 stopped(HTTP 活着
+    # 但 SDK ws 拒连,app 必崩),--robot 启动必须确保 running 再继续。
+    _DM_STATE=$(curl -s --max-time 5 http://127.0.0.1:8000/api/daemon/status | grep -o '"state":"[a-z]*"' | cut -d'"' -f4)
+    if [[ "$_DM_STATE" != "running" ]]; then
+        log "本体 daemon 状态 $_DM_STATE → 发送唤醒(wake_up,电机动作约 10s)…"
+        curl -s -X POST "http://127.0.0.1:8000/api/daemon/start?wake_up=true" > /dev/null
+        for _ in $(seq 1 30); do
+            _DM_STATE=$(curl -s --max-time 3 http://127.0.0.1:8000/api/daemon/status 2>/dev/null | grep -o '"state":"[a-z]*"' | cut -d'"' -f4)
+            [[ "$_DM_STATE" == "running" ]] && break
+            sleep 2
+        done
+        [[ "$_DM_STATE" == "running" ]] || { err "唤醒超时(60s),请查看官方 daemon 状态"; exit 1; }
+    fi
+    log "本体 daemon 已就绪(state=running,不启动 sim daemon)"
     DAEMON_PID=""
 else
     DAEMON_FLAGS="--sim --headless"
