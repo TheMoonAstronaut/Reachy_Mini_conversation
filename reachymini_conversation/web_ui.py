@@ -540,17 +540,16 @@ STATE_ERROR = "error"
 # ============================================================================
 _RUN_MODE_PURE_SIM = "🧪 纯仿真"
 _RUN_MODE_REAL_WIRED = "🤖 真机+仿真(有线)"
-_RUN_MODE_REAL_WIRELESS = "🌐 真机+仿真(无线·暂不支持相机/手部跟随)"
+# 产品范围(2026-09-20 用户定):无线版只在树莓派本体跑(on-robot),PC 不做
+# 无线远程操控 —— 故 PC 下拉只保留 仿真/有线 两项;无线走 scripts/start.sh --robot
 _RUN_MODE_ON_ROBOT = "🤖 机器人本体(on-robot,不支持切换)"
-_RUN_MODE_CHOICES = [_RUN_MODE_PURE_SIM, _RUN_MODE_REAL_WIRED, _RUN_MODE_REAL_WIRELESS]
+_RUN_MODE_CHOICES = [_RUN_MODE_PURE_SIM, _RUN_MODE_REAL_WIRED]
 
 
 def _run_mode_choice_to_request(choice: str) -> tuple[str, dict[str, Any]]:
     """下拉文案 → (目标 run_mode, real_connection 配置)。"""
     if choice == _RUN_MODE_REAL_WIRED:
         return "real_plus_sim", {"type": "wired", "port": 8001}
-    if choice == _RUN_MODE_REAL_WIRELESS:
-        return "real_plus_sim", {"type": "wireless", "host": "reachy-mini.local", "port": 8000}
     if choice == _RUN_MODE_ON_ROBOT:
         return "pure_real", {}
     return "pure_sim", {}

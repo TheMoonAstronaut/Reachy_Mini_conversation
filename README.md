@@ -60,10 +60,10 @@ mkdir -p ~/.cache/reachymini
 curl -L -o ~/.cache/reachymini/hand_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
 
-# 7. 启动(三种模式一条命令隔离,各自独立日志)
-./scripts/start.sh --sim        # 纯仿真(默认)
-./scripts/start.sh --wired      # 有线真机:启动即自动连接 USB 真机
-./scripts/start.sh --wireless   # 无线真机:启动即自动连 reachy-mini.local
+# 7. 启动(三种形态一条命令隔离,各自独立日志)
+./scripts/start.sh --sim        # 纯仿真(默认,跑在 PC)
+./scripts/start.sh --wired      # 有线真机:PC + USB 接入的机器人(启动即自动连)
+./scripts/start.sh --robot      # 无线版唯一形态:跑在机器人树莓派本体(SSH 上去执行)
 # 日志:logs/start-<模式>-<时间戳>.log
 ```
 

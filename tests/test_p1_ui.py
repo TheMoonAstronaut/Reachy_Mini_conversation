@@ -185,27 +185,3 @@ def test_theme_css_wired_into_launch():
     assert "css=REACHY_CSS" in src, "launch() 缺少 css=REACHY_CSS"
 
 
-def test_auto_connect_env_parsing():
-    """模式命令隔离:REACHYMINI_CONN 环境变量解析(单元级,不触发连接)。"""
-    import os
-    from unittest import mock
-
-    # wired 配置
-    with mock.patch.dict(os.environ, {"REACHYMINI_CONN": "wired"}, clear=False):
-        conn = os.environ.get("REACHYMINI_CONN", "").strip().lower()
-        assert conn == "wired"
-
-    # wireless 配置 + 自定义主机/端口
-    with mock.patch.dict(
-        os.environ,
-        {"REACHYMINI_CONN": "Wireless", "REACHYMINI_HOST": "10.0.0.5", "REACHYMINI_PORT": "9000"},
-        clear=False,
-    ):
-        conn = os.environ.get("REACHYMINI_CONN", "").strip().lower()
-        host = os.environ.get("REACHYMINI_HOST", "reachy-mini.local")
-        port = int(os.environ.get("REACHYMINI_PORT", "8000"))
-        assert (conn, host, port) == ("wireless", "10.0.0.5", 9000)
-
-    # 未设置 → 空(不自动连接)
-    with mock.patch.dict(os.environ, {}, clear=True):
-        assert os.environ.get("REACHYMINI_CONN", "").strip().lower() == ""

@@ -193,18 +193,12 @@ class ConversationApp(ReachyMiniApp):
             set_mode_manager(_mm)
             logger.info("[V2] ModeManager 就绪(UI 下拉可切换真机模式)")
 
-            # 模式命令隔离(2026-09-20):--wired/--wireless 启动即自动连接,
-            # 不必再点 UI。通路来自 start.sh 注入的 REACHYMINI_CONN。
+            # 模式命令隔离(2026-09-20):--wired 启动即自动连接,不必再点 UI。
+            # 通路来自 start.sh 注入的 REACHYMINI_CONN。产品范围:无线版只在
+            # 树莓派本体跑(--robot),PC 不做无线远程操控,故无 wireless 分支。
             _conn = os.environ.get("REACHYMINI_CONN", "").strip().lower()
-            if run_mode == "real_plus_sim" and _conn in ("wired", "wireless"):
-                if _conn == "wireless":
-                    _cfg: dict[str, Any] = {
-                        "type": "wireless",
-                        "host": os.environ.get("REACHYMINI_HOST", "reachy-mini.local"),
-                        "port": int(os.environ.get("REACHYMINI_PORT", "8000")),
-                    }
-                else:
-                    _cfg = {"type": "wired", "port": 8001}
+            if run_mode == "real_plus_sim" and _conn == "wired":
+                _cfg: dict[str, Any] = {"type": "wired", "port": 8001}
                 logger.info(f"[V2] 启动即自动连接真机({_conn})…")
 
                 def _auto_connect() -> None:

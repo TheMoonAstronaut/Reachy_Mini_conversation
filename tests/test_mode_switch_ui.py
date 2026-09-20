@@ -19,7 +19,6 @@ def test_choice_mapping():
     from reachymini_conversation.web_ui import (
         _RUN_MODE_PURE_SIM,
         _RUN_MODE_REAL_WIRED,
-        _RUN_MODE_REAL_WIRELESS,
         _run_mode_choice_to_request,
     )
 
@@ -27,8 +26,6 @@ def test_choice_mapping():
     assert mode == "pure_sim"
     mode, cfg = _run_mode_choice_to_request(_RUN_MODE_REAL_WIRED)
     assert mode == "real_plus_sim" and cfg["type"] == "wired" and cfg["port"] == 8001
-    mode, cfg = _run_mode_choice_to_request(_RUN_MODE_REAL_WIRELESS)
-    assert mode == "real_plus_sim" and cfg["type"] == "wireless" and "host" in cfg
 
 
 def test_render_run_mode_states():

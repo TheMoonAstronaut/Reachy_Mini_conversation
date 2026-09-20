@@ -11,9 +11,9 @@
 #   ./scripts/start.sh --preload-datasets   预下载 HF emotions dataset(决策 16D)
 #   ./scripts/start.sh --sim                纯仿真(默认)
 #   ./scripts/start.sh --wired              有线真机(启动即自动连接,无需点⚡)
-#   ./scripts/start.sh --wireless           无线真机(启动即自动连 reachy-mini.local)
-#   ./scripts/start.sh --robot              on-robot(跑在无线版树莓派本体)
-#   三种 PC 模式分别写日志到 logs/start-<模式>-<时间戳>.log,便于隔离 debug
+#   ./scripts/start.sh --robot              on-robot(跑在无线版树莓派本体;
+#                                           无线版的唯一形态,PC 不做无线远程操控)
+#   各模式日志:logs/start-<模式>-<时间戳>.log,便于隔离 debug
 #   ./scripts/start.sh --daemon-only        只启动 daemon,不启动应用
 #
 # 行为:
@@ -74,9 +74,8 @@ while [[ $# -gt 0 ]]; do
         --robot)             ROBOT_MODE=true; LAUNCH_MODE="robot"; shift ;;
         --sim)               LAUNCH_MODE="sim"; shift ;;
         --wired)             LAUNCH_MODE="wired"; shift ;;
-        --wireless)          LAUNCH_MODE="wireless"; shift ;;
         -h|--help)
-            echo "用法: $0 [--sim|--wired|--wireless] [--robot] [--preload-datasets] [--daemon-only] [--no-media]"
+            echo "用法: $0 [--sim|--wired] [--robot] [--preload-datasets] [--daemon-only] [--no-media]"
             echo ""
             echo "  --real               真机 + 仿真镜像模式"
             echo "  --ui                 启动 Web UI(python -m reachymini_conversation --ui)"
@@ -87,8 +86,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --sim                纯仿真(默认;日志 logs/start-sim-*.log)"
             echo "  --wired              有线真机:启动即自动连接 USB 真机,"
             echo "                       无需点 ⚡(日志 logs/start-wired-*.log)"
-            echo "  --wireless           无线真机:启动即自动连 reachy-mini.local:8000"
-            echo "                       (日志 logs/start-wireless-*.log)"
             echo "  --robot              on-robot 模式:跑在无线版机身树莓派上,"
             echo "                       不启动 sim daemon,直连本体官方 daemon(:8000),"
             echo "  -h, --help           显示帮助"
@@ -154,9 +151,6 @@ if [[ "$LAUNCH_MODE" == "robot" ]]; then
 elif [[ "$LAUNCH_MODE" == "wired" ]]; then
     export REACHYMINI_RUN_MODE=real_plus_sim
     export REACHYMINI_CONN=wired
-elif [[ "$LAUNCH_MODE" == "wireless" ]]; then
-    export REACHYMINI_RUN_MODE=real_plus_sim
-    export REACHYMINI_CONN=wireless
 else
     export REACHYMINI_RUN_MODE=pure_sim
 fi
