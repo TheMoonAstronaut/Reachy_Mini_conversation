@@ -101,9 +101,18 @@ class RealVoiceLoop:
     def _audio_source(self, bus: Any) -> tuple[Any | None, str]:
         """按连接类型选音源:(source_obj, 'wired'|'wireless')。
 
-        wired:本机 USB 声卡(local_audio 单例,GStreamerAudio);
-        wireless:real_mini.media(机器人 daemon 媒体链)。
+        wired(PC + USB dock):本机 USB 声卡(local_audio 单例,GStreamerAudio)
+          —— 有线模式 daemon B 以 --no-media 运行,不占用声卡,直连是唯一通路。
+        wireless(远程 client):real_mini.media(机器人 daemon 媒体链)。
+        pure_real(on-robot 树莓派):**daemon 媒体** —— 官方 daemon 独占
+          Reachy Mini Audio 声卡(实测 fuser:pcmC0D0p/c 被 daemon 单进程
+          持有),local_audio 直连初始化"OK"但数据进不了被独占的设备,
+          必须走 daemon 媒体(IPC),录音同理。
         """
+        run_mode = self._orch.run_mode
+        if run_mode == "pure_real":
+            media = getattr(self._orch.sim_mini, "media", None)
+            return media, "wireless"
         if bus.get("real_conn_type", "wired") == "wireless":
             media = getattr(self._orch.real_mini, "media", None)
             return media, "wireless"
@@ -274,17 +283,14 @@ def make_tts_audio_router(orchestrator_getter: Any):
 
         target = None
         local_audio = None
-        if orch.run_mode in ("real_plus_sim", "pure_real") and (
-            orch.real_mini is not None or orch.run_mode == "pure_real"
-        ):
+        if orch.run_mode == "pure_real":
+            # on-robot(树莓派):官方 daemon 独占声卡(实测 fuser 单进程持有
+            # pcmC0D0p/c),local_audio 直连数据进不去 → 播放必须走 daemon
+            # 媒体(IPC 推流,daemon 自己播音并驱动 wobbler,无需 app 侧接线)
+            target = orch.sim_mini
+        elif orch.run_mode == "real_plus_sim" and orch.real_mini is not None:
             bus = get_state_bus()
-            # pure_real(on-robot):真机即 sim_mini 位,音频走本地声卡
-            # (机器人扬声器在树莓派上是本地 USB 声卡,与有线模式同款路径)
-            if orch.run_mode == "pure_real":
-                from reachymini_conversation.local_audio import get_local_audio
-
-                local_audio = get_local_audio()
-            elif bus.get("real_conn_type", "wired") == "wireless":
+            if bus.get("real_conn_type", "wired") == "wireless":
                 target = orch.real_mini
             else:
                 from reachymini_conversation.local_audio import get_local_audio

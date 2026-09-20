@@ -414,7 +414,14 @@ class _DaemonMediaFrameProvider:
     media.get_frame_jpeg() 经 IPC 直出 JPEG,与 UsbEyeCamera 消费接口
     一致(start/stop/get_frame_jpeg)。start/stop 为 no-op:daemon 的媒体
     生命周期由 daemon 自己管(disable_wobbling/关 daemon 才释放)。
+
+    降采样(2026-09-20 实测):daemon 直出全尺寸帧(~342KB/帧,8fps ≈
+    16Mbps),树莓派 WiFi 推流延迟大;provider 内 PIL 降宽到 720p 再推
+    (~70KB/帧 ≈ 3.5Mbps),CM4 上解码+重编码约占 0.5 核。PIL 缺失时
+    回退原图。
     """
+
+    MAX_WIDTH = 720
 
     def __init__(self, reachy_mini: Any) -> None:
         self._media = getattr(reachy_mini, "media", None)
@@ -429,9 +436,25 @@ class _DaemonMediaFrameProvider:
         if self._media is None:
             return None
         try:
-            return self._media.get_frame_jpeg()
+            raw = self._media.get_frame_jpeg()
         except Exception:
             return None
+        if not raw:
+            return None
+        try:
+            import io
+
+            from PIL import Image
+
+            img = Image.open(io.BytesIO(raw))
+            if img.width > self.MAX_WIDTH:
+                h = int(img.height * self.MAX_WIDTH / img.width)
+                img = img.resize((self.MAX_WIDTH, h), Image.BILINEAR)
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, "JPEG", quality=70)
+            return buf.getvalue()
+        except Exception:
+            return raw  # 降采样失败兜底,原图可用
 
 
 # ============================================================================
