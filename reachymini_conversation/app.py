@@ -287,13 +287,22 @@ class ConversationApp(ReachyMiniApp):
 
             # V2 Fix D:真机眼睛相机(USB 直连,懒开;没插真机就走占位图)。
             # 复用 §2.5 的实例(与手部跟随共享抓帧缓存)。
+            # pure_real(on-robot)时换 daemon 媒体源:无线版相机是 CSI,
+            # 由本体 daemon 媒体服务持有,PC 那套 UsbEyeCamera(by-id 找
+            # "Reachy_Mini_Camera")在树莓派上永远找不到(2026-09-20 实测
+            # 日志 "[usb-eye] 未找到 Reachy 相机");daemon 媒体经 IPC 直出
+            # JPEG,与 /camera_feed 的消费接口完全一致。
+            if run_mode == "pure_real":
+                _real_frame_provider = _DaemonMediaFrameProvider(reachy_mini)
+            else:
+                _real_frame_provider = self._usb_eye
             stream_app = create_camera_stream_app(
                 sim_mini=reachy_mini,
                 real_mini=None,
                 target_fps=self.target_fps,
                 scene_provider=scene_receiver,
                 static_dir=str(PROJECT_ROOT / "static"),
-                real_frame_provider=self._usb_eye,
+                real_frame_provider=_real_frame_provider,
             )
             stream_config = uvicorn.Config(
                 stream_app,
@@ -393,6 +402,36 @@ class ConversationApp(ReachyMiniApp):
             if stop_event.wait(interval):
                 break
         logger.info("[head-poller] stopped")
+
+
+# ============================================================================
+# on-robot 相机源:pure_real 下 /camera_feed 走 daemon 媒体而非 UsbEyeCamera
+# ============================================================================
+class _DaemonMediaFrameProvider:
+    """把 daemon 媒体相机包成 camera_stream 的 real_frame_provider 形状。
+
+    无线版相机是 CSI、由本体 daemon 媒体服务持有;LOCAL backend 的 SDK
+    media.get_frame_jpeg() 经 IPC 直出 JPEG,与 UsbEyeCamera 消费接口
+    一致(start/stop/get_frame_jpeg)。start/stop 为 no-op:daemon 的媒体
+    生命周期由 daemon 自己管(disable_wobbling/关 daemon 才释放)。
+    """
+
+    def __init__(self, reachy_mini: Any) -> None:
+        self._media = getattr(reachy_mini, "media", None)
+
+    def start(self) -> None:
+        return  # daemon 媒体已在 daemon 侧就绪
+
+    def stop(self) -> None:
+        return
+
+    def get_frame_jpeg(self) -> bytes | None:
+        if self._media is None:
+            return None
+        try:
+            return self._media.get_frame_jpeg()
+        except Exception:
+            return None
 
 
 # ============================================================================
