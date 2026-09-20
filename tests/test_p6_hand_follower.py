@@ -611,3 +611,49 @@ def test_flip_horizontal_mirrors_detection_coords():
     finally:
         PIL.Image.open = orig_open
         restore()
+
+
+
+def test_hand_follower_mediapipe_probe_failure_degrades(tmp_path):
+    """MediaPipe 原生库不可用(CM4 SIGILL)时优雅降级,不拖死 app。
+
+    回归(2026-09-20 树莓派实测):create_from_options 加载 .so 触发
+    SIGILL 会炸掉整个进程;start() 必须先经 _mediapipe_usable 子进程
+    探活,失败则 available=False 且不起线程。
+    """
+    from unittest import mock
+
+    from reachymini_conversation import hand_follower
+    from reachymini_conversation.state_bus import get_state_bus, reset_state_bus
+
+    reset_state_bus()
+    (tmp_path / "hand_landmarker.task").write_bytes(b"FAKE")
+
+    with mock.patch.object(hand_follower, "_mediapipe_usable", return_value=False):
+        hf = hand_follower.HandFollower(
+            orchestrator=MagicMock(),
+            get_frame_jpeg_fn=MagicMock(return_value=None),
+            model_path=str(tmp_path / "hand_landmarker.task"),
+        )
+        hf.start()
+
+    assert hf.available is False
+    assert hf._thread is None  # 线程不起
+    assert get_state_bus().get("hand_available") is False
+
+
+def test_hand_follower_missing_model_shortcircuits_before_probe(tmp_path):
+    """模型不存在时短路在探测之前(_mediapipe_usable 不应被调用)。"""
+    from unittest import mock
+
+    from reachymini_conversation import hand_follower
+
+    with mock.patch.object(hand_follower, "_mediapipe_usable") as spy:
+        hf = hand_follower.HandFollower(
+            orchestrator=MagicMock(),
+            get_frame_jpeg_fn=MagicMock(return_value=None),
+            model_path=str(tmp_path / "nope.task"),
+        )
+        hf.start()
+    spy.assert_not_called()
+    assert hf.available is False

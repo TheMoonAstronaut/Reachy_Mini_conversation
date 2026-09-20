@@ -85,19 +85,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ---------- 激活 conda ----------
+# ---------- 激活 Python 环境 ----------
+# 优先 conda(开发机);无 conda 时回退已激活的 venv/系统 python(on-robot
+# 树莓派部署用 ~/.venv/reachy,激活后直接进本脚本即可)
 CONDA_ENV="${CONDA_ENV:-reachy}"
 
-if ! command -v conda >/dev/null 2>&1; then
-    err "找不到 conda,请先安装 Miniconda/Anaconda"
-    exit 1
+if command -v conda >/dev/null 2>&1; then
+    # shellcheck disable=SC1091
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "$CONDA_ENV"
+    log "已激活 conda 环境:$CONDA_ENV"
+else
+    log "无 conda,使用当前 Python 环境($(command -v python || echo 未找到))"
 fi
 
-# shellcheck disable=SC1091
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate "$CONDA_ENV"
-
-log "已激活 conda 环境:$CONDA_ENV"
 log "Python: $(python --version 2>&1)"
 log "PWD:    $(pwd)"
 

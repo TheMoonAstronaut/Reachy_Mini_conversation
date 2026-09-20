@@ -67,6 +67,55 @@ logger = logging.getLogger(__name__)
 # 默认模型路径(用户首次跑会下载)
 DEFAULT_MODEL_PATH = Path.home() / ".cache" / "reachymini" / "hand_landmarker.task"
 
+# MediaPipe 可用性探测缓存(on-robot 刚需,见 _mediapipe_usable)
+_MP_PROBE_MARKER = Path.home() / ".cache" / "reachymini" / "mp_probe_ok"
+
+
+def _mediapipe_usable(model_path: Path) -> bool:
+    """子进程预检 MediaPipe HandLandmarker 能否在本机创建。
+
+    为什么需要(2026-09-20 树莓派 CM4 实测):mediapipe 1.0.1 的 aarch64
+    wheel 内原生库按 AES 指令编译(go sigill-fail-fast / armv8 crypto
+    intrinsics),而 CM4(BCM2711)未实现 ARMv8 crypto 扩展 ——
+    create_from_options 经 ctypes 加载 .so 时整个进程被 SIGILL 炸掉。
+    SIGILL 是进程级致命信号,try/except 无法捕获,会把整个 app 拖死;
+    而手部跟随是可选增强,绝不许拖死主应用。故:
+      - 首次启动用子进程跑完整创建流程,探活结果缓存到 mp_probe_ok
+        标记文件(成功后以后启动秒过,不重跑);
+      - 探测失败(非零返回/超时)→ 判定不可用,HandFollower 优雅降级
+        (available=False,UI 显"不可用"),app 其余功能不受影响。
+    """
+    if _MP_PROBE_MARKER.exists():
+        return True
+    import subprocess
+    import sys
+
+    code = (
+        "import mediapipe as mp;"
+        f"opts = mp.tasks.vision.HandLandmarkerOptions("
+        f"base_options=mp.tasks.BaseOptions(model_asset_path={str(model_path)!r}),"
+        "running_mode=mp.tasks.vision.RunningMode.VIDEO, num_hands=1);"
+        "mp.tasks.vision.HandLandmarker.create_from_options(opts).close();"
+        "print('PROBE_OK')"
+    )
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            timeout=180,
+        )
+        if r.returncode == 0 and b"PROBE_OK" in r.stdout:
+            _MP_PROBE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+            _MP_PROBE_MARKER.touch()
+            return True
+        logger.warning(
+            f"[HandFollower] MediaPipe 探测失败(rc={r.returncode}): "
+            f"{r.stderr[-200:]!r}"
+        )
+    except Exception as e:
+        logger.warning(f"[HandFollower] MediaPipe 探测异常: {e}")
+    return False
+
 
 class HandFollower:
     """手部跟随:MediaPipe HandLandmarker → look_at_image。
@@ -177,6 +226,27 @@ class HandFollower:
         """启动后台线程(懒加载 HandLandmarker)。"""
         if self._thread is not None and self._thread.is_alive():
             logger.debug("[HandFollower] already running")
+            return
+
+        # 懒加载模型前先探活 MediaPipe 原生库(SIGILL 免疫,见
+        # _mediapipe_usable 注释;探测失败优雅降级,绝不拖死 app)
+        if not self.model_path.exists():
+            logger.warning(f"[HandFollower] 模型文件不存在:{self.model_path}")
+            self._available = False
+            self._bus.update("hand_available", False)
+            logger.warning(
+                "[HandFollower] disabled(模型不可用)。下载:"
+                "https://storage.googleapis.com/mediapipe-models/"
+                "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
+            )
+            return
+        if not _mediapipe_usable(self.model_path):
+            self._available = False
+            self._bus.update("hand_available", False)
+            logger.warning(
+                "[HandFollower] disabled(本机 MediaPipe 原生库不可用,"
+                "如 CM4 缺 AES 指令)——手部跟随关闭,其余功能不受影响"
+            )
             return
 
         # 懒加载模型
