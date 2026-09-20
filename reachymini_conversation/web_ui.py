@@ -541,6 +541,7 @@ STATE_ERROR = "error"
 _RUN_MODE_PURE_SIM = "🧪 纯仿真"
 _RUN_MODE_REAL_WIRED = "🤖 真机+仿真(有线)"
 _RUN_MODE_REAL_WIRELESS = "🌐 真机+仿真(无线·暂不支持相机/手部跟随)"
+_RUN_MODE_ON_ROBOT = "🤖 机器人本体(on-robot,不支持切换)"
 _RUN_MODE_CHOICES = [_RUN_MODE_PURE_SIM, _RUN_MODE_REAL_WIRED, _RUN_MODE_REAL_WIRELESS]
 
 
@@ -550,12 +551,16 @@ def _run_mode_choice_to_request(choice: str) -> tuple[str, dict[str, Any]]:
         return "real_plus_sim", {"type": "wired", "port": 8001}
     if choice == _RUN_MODE_REAL_WIRELESS:
         return "real_plus_sim", {"type": "wireless", "host": "reachy-mini.local", "port": 8000}
+    if choice == _RUN_MODE_ON_ROBOT:
+        return "pure_real", {}
     return "pure_sim", {}
 
 
 def _run_mode_to_choice(run_mode: str, real_connecting: bool = False) -> str:
     if real_connecting:
         return _RUN_MODE_REAL_WIRED  # 切换中保持显示目标态(简化)
+    if run_mode == "pure_real":
+        return _RUN_MODE_ON_ROBOT
     return _RUN_MODE_PURE_SIM if run_mode == "pure_sim" else _RUN_MODE_REAL_WIRED
 
 
@@ -587,15 +592,30 @@ def build_ui() -> gr.Blocks:
             doa_pill = gr.HTML(value=_render_doa(bus.snapshot()), elem_classes=["pill-cell"])
             hand_pill = gr.HTML(value=_render_hand(bus.snapshot()), elem_classes=["pill-cell"])
             # V2:运行模式下拉切换(纯仿真 ↔ 真机+仿真 有线/无线)
-            mode_dropdown = gr.Dropdown(
-                choices=_RUN_MODE_CHOICES,
-                value=_RUN_MODE_PURE_SIM,
-                show_label=False,
-                container=False,
-                interactive=True,
-                min_width=165,
-                elem_classes=["rm-mode-dropdown"],
-            )
+            # pure_real(on-robot):下拉只显示本体项且禁用 —— 否则初始值
+            # (纯仿真)与真实模式不一致,页面加载即触发切换请求被守卫拦截,
+            # 用户看到莫名其妙的报错(2026-09-20 树莓派实测)
+            _initial_run_mode = bus.get("run_mode", "pure_sim")
+            if _initial_run_mode == "pure_real":
+                mode_dropdown = gr.Dropdown(
+                    choices=[_RUN_MODE_ON_ROBOT],
+                    value=_RUN_MODE_ON_ROBOT,
+                    show_label=False,
+                    container=False,
+                    interactive=False,
+                    min_width=165,
+                    elem_classes=["rm-mode-dropdown"],
+                )
+            else:
+                mode_dropdown = gr.Dropdown(
+                    choices=_RUN_MODE_CHOICES,
+                    value=_RUN_MODE_PURE_SIM,
+                    show_label=False,
+                    container=False,
+                    interactive=True,
+                    min_width=165,
+                    elem_classes=["rm-mode-dropdown"],
+                )
             # 真机连接/断开快捷按钮(2026-09-16 用户需求:网页先切真机模式、
             # 后插 USB 时需要反复切换才能连上;给显式重连/断开入口,
             # 复用下拉同一 switch 通路)
