@@ -9,6 +9,11 @@
 #   ./scripts/start.sh --no-media           降级:daemon 不带媒体(无相机/音频,
 #                                           sim 视频流不可用,仅排障用)
 #   ./scripts/start.sh --preload-datasets   预下载 HF emotions dataset(决策 16D)
+#   ./scripts/start.sh --sim                纯仿真(默认)
+#   ./scripts/start.sh --wired              有线真机(启动即自动连接,无需点⚡)
+#   ./scripts/start.sh --wireless           无线真机(启动即自动连 reachy-mini.local)
+#   ./scripts/start.sh --robot              on-robot(跑在无线版树莓派本体)
+#   三种 PC 模式分别写日志到 logs/start-<模式>-<时间戳>.log,便于隔离 debug
 #   ./scripts/start.sh --daemon-only        只启动 daemon,不启动应用
 #
 # 行为:
@@ -57,6 +62,7 @@ PRELOAD_DATASETS=false
 DAEMON_ONLY=false
 NO_MEDIA=false
 ROBOT_MODE=false
+LAUNCH_MODE="sim"   # sim | wired | wireless | robot(隔离 debug:一种模式一条命令)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -65,9 +71,12 @@ while [[ $# -gt 0 ]]; do
         --preload-datasets)  PRELOAD_DATASETS=true; shift ;;
         --daemon-only)       DAEMON_ONLY=true; shift ;;
         --no-media)          NO_MEDIA=true; shift ;;
-        --robot)             ROBOT_MODE=true; shift ;;
+        --robot)             ROBOT_MODE=true; LAUNCH_MODE="robot"; shift ;;
+        --sim)               LAUNCH_MODE="sim"; shift ;;
+        --wired)             LAUNCH_MODE="wired"; shift ;;
+        --wireless)          LAUNCH_MODE="wireless"; shift ;;
         -h|--help)
-            echo "用法: $0 [--real] [--ui] [--preload-datasets] [--daemon-only] [--no-media] [--robot]"
+            echo "用法: $0 [--sim|--wired|--wireless] [--robot] [--preload-datasets] [--daemon-only] [--no-media]"
             echo ""
             echo "  --real               真机 + 仿真镜像模式"
             echo "  --ui                 启动 Web UI(python -m reachymini_conversation --ui)"
@@ -75,9 +84,13 @@ while [[ $# -gt 0 ]]; do
             echo "  --daemon-only        只启动 daemon,不启动应用"
             echo "  --no-media           降级模式:daemon 禁用全部媒体(相机/音频),"
             echo "                       sim 视频流不可用,仅媒体链路故障时排障用"
+            echo "  --sim                纯仿真(默认;日志 logs/start-sim-*.log)"
+            echo "  --wired              有线真机:启动即自动连接 USB 真机,"
+            echo "                       无需点 ⚡(日志 logs/start-wired-*.log)"
+            echo "  --wireless           无线真机:启动即自动连 reachy-mini.local:8000"
+            echo "                       (日志 logs/start-wireless-*.log)"
             echo "  --robot              on-robot 模式:跑在无线版机身树莓派上,"
             echo "                       不启动 sim daemon,直连本体官方 daemon(:8000),"
-            echo "                       局域网内任意设备打开 UI 控制"
             echo "  -h, --help           显示帮助"
             exit 0
             ;;
@@ -133,6 +146,21 @@ setup_reachy_audio() {
 }
 setup_reachy_audio
 
+# ---------- 模式注入(隔离 debug:一种模式一条命令,互不污染)----------
+# wired/wireless 均为 real_plus_sim(sim + real 镜像),差别只在启动时
+# 自动连接的通路(PC USB daemon B / 网络连机器人本体 daemon)。
+if [[ "$LAUNCH_MODE" == "robot" ]]; then
+    export REACHYMINI_RUN_MODE=pure_real
+elif [[ "$LAUNCH_MODE" == "wired" ]]; then
+    export REACHYMINI_RUN_MODE=real_plus_sim
+    export REACHYMINI_CONN=wired
+elif [[ "$LAUNCH_MODE" == "wireless" ]]; then
+    export REACHYMINI_RUN_MODE=real_plus_sim
+    export REACHYMINI_CONN=wireless
+else
+    export REACHYMINI_RUN_MODE=pure_sim
+fi
+
 # ---------- 启动 daemon ----------
 # P7.B:媒体链路已修好(unixfd backport 插件 + SDK media_server 降级补丁),
 # 默认带媒体启动;--no-media 仅作降级排障用。
@@ -166,11 +194,18 @@ else
         warn "决策 16D:首次启动会从 HF 下载 emotions dataset(~100MB)"
     fi
 
-    log "启动 daemon(launcher 方案 B):python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS"
-    # 守护进程后台跑,日志到 /tmp/reachy-daemon.log
-    python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS > /tmp/reachy-daemon.log 2>&1 &
-    DAEMON_PID=$!
-    log "Daemon PID: $DAEMON_PID,日志:tail -f /tmp/reachy-daemon.log"
+    # 健康复用:8000 已有 running 的 sim daemon 直接收养(模式切换调试时
+    # 不用先杀旧实例,避免"debug 无线影响仿真/有线"的相互污染)
+    if curl -sf -m 2 "http://127.0.0.1:8000/api/daemon/status" 2>/dev/null | grep -q '"running"'; then
+        log "8000 已有健康 sim daemon,直接复用(跳过新起)"
+        DAEMON_PID=""
+    else
+        log "启动 daemon(launcher 方案 B):python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS"
+        # 守护进程后台跑,日志到 /tmp/reachy-daemon.log
+        python -m reachymini_conversation.daemon_launcher $DAEMON_FLAGS > /tmp/reachy-daemon.log 2>&1 &
+        DAEMON_PID=$!
+        log "Daemon PID: $DAEMON_PID,日志:tail -f /tmp/reachy-daemon.log"
+    fi
 
     # 等 daemon 起好:轮询 HTTP API 直到就绪(固定 sleep 3 不够 ——
     # daemon 的 lifespan 要完成 mujoco 加载 + wake_up 才接受连接,
@@ -182,8 +217,8 @@ else
             DAEMON_READY=true
             break
         fi
-        # daemon 进程挂了就不用等了
-        if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+        # daemon 进程挂了就不用等了(复用模式下 DAEMON_PID 为空,跳过检查)
+        if [[ -n "$DAEMON_PID" ]] && ! kill -0 "$DAEMON_PID" 2>/dev/null; then
             err "daemon 进程提前退出,日志见 /tmp/reachy-daemon.log"
             exit 1
         fi
@@ -196,9 +231,11 @@ else
     log "daemon 已就绪"
 
     cleanup() {
-        log "关闭 daemon (PID $DAEMON_PID)..."
-        kill "$DAEMON_PID" 2>/dev/null || true
-        wait "$DAEMON_PID" 2>/dev/null || true
+        if [[ -n "$DAEMON_PID" ]]; then
+            log "关闭 daemon (PID $DAEMON_PID)..."
+            kill "$DAEMON_PID" 2>/dev/null || true
+            wait "$DAEMON_PID" 2>/dev/null || true
+        fi
     }
     trap cleanup EXIT INT TERM
 
@@ -227,5 +264,7 @@ if [[ -n "${LAN_IP}" && "${LAN_IP}" != "127.0.0.1" ]]; then
     echo ""
 fi
 
-log "UI 模式(python -m reachymini_conversation --ui)"
-python -m reachymini_conversation --ui
+log "UI 模式(python -m reachymini_conversation --ui),日志 tee 到 logs/"
+mkdir -p logs
+LOG_FILE="logs/start-${LAUNCH_MODE}-$(date +%Y%m%d-%H%M%S).log"
+python -m reachymini_conversation --ui 2>&1 | tee "$LOG_FILE"

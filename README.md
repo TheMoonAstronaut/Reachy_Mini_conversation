@@ -60,11 +60,15 @@ mkdir -p ~/.cache/reachymini
 curl -L -o ~/.cache/reachymini/hand_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
 
-# 7. 启动
-./scripts/start.sh --ui
+# 7. 启动(三种模式一条命令隔离,各自独立日志)
+./scripts/start.sh --sim        # 纯仿真(默认)
+./scripts/start.sh --wired      # 有线真机:启动即自动连接 USB 真机
+./scripts/start.sh --wireless   # 无线真机:启动即自动连 reachy-mini.local
+# 日志:logs/start-<模式>-<时间戳>.log
 ```
 
 启动后浏览器打开 [http://localhost:7860](http://localhost:7860)。
+切换调试模式:Ctrl+C 停掉换命令重启(sim daemon 健康实例自动复用)。
 
 **局域网访问**:UI 监听 `0.0.0.0`,同一 WiFi 下的手机/平板/其他电脑直接用
 `http://<本机局域网IP>:7860` 打开即可(启动时控制台会打印,如

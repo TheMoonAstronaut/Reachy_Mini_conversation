@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
@@ -188,8 +189,40 @@ class ConversationApp(ReachyMiniApp):
         try:
             from reachymini_conversation.mode_manager import ModeManager, set_mode_manager
 
-            set_mode_manager(ModeManager(self._orchestrator))
+            _mm = ModeManager(self._orchestrator)
+            set_mode_manager(_mm)
             logger.info("[V2] ModeManager 就绪(UI 下拉可切换真机模式)")
+
+            # 模式命令隔离(2026-09-20):--wired/--wireless 启动即自动连接,
+            # 不必再点 UI。通路来自 start.sh 注入的 REACHYMINI_CONN。
+            _conn = os.environ.get("REACHYMINI_CONN", "").strip().lower()
+            if run_mode == "real_plus_sim" and _conn in ("wired", "wireless"):
+                if _conn == "wireless":
+                    _cfg: dict[str, Any] = {
+                        "type": "wireless",
+                        "host": os.environ.get("REACHYMINI_HOST", "reachy-mini.local"),
+                        "port": int(os.environ.get("REACHYMINI_PORT", "8000")),
+                    }
+                else:
+                    _cfg = {"type": "wired", "port": 8001}
+                logger.info(f"[V2] 启动即自动连接真机({_conn})…")
+
+                def _auto_connect() -> None:
+                    try:
+                        result = _mm.switch_to("real_plus_sim", _cfg)
+                        if result.get("ok"):
+                            logger.info(f"[V2] 自动连接成功({_conn})")
+                        else:
+                            logger.warning(
+                                f"[V2] 自动连接失败:{result.get('error')} —— "
+                                "可稍后点顶栏 ⚡ 重试"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[V2] 自动连接异常: {type(e).__name__}: {e}")
+
+                threading.Thread(
+                    target=_auto_connect, daemon=True, name="auto-connect"
+                ).start()
 
             # V2.4:真机语音环路(real 模式 + 语音模式时采真机麦克风)
             from reachymini_conversation.web_ui import (
