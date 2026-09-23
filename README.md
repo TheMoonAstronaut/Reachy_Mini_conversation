@@ -70,10 +70,10 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 启动后浏览器打开 [http://localhost:7860](http://localhost:7860)。
 切换调试模式:Ctrl+C 停掉换命令重启(sim daemon 健康实例自动复用)。
 
-**Windows 用户**:原生 Windows 适配尚未验证(GStreamer/PyGObject 系统链是
-主要障碍);推荐 **WSL2**(Windows 内跑 Ubuntu,之后完全按上方 Linux 步骤走,
-真机 USB 也能透传)。原生适配的脚手架(`scripts/*.ps1`)已就位,欢迎 PR —
-见 [`docs/INSTALL.md`](docs/INSTALL.md) Windows 章节。
+**Windows 用户**:支持原生 Windows(官方 SDK 经 `gstreamer-bundle` 自动
+带 GStreamer,无需手动装 GTK):先跑 `.\scripts\install_deps.ps1` 装环境,
+再 `.\scripts\start.ps1`(仿真)或 `.\scripts\start.ps1 -Wired`(有线真机)。
+细节见 [`docs/INSTALL.md`](docs/INSTALL.md) Windows 章节。
 
 **局域网访问**:UI 监听 `0.0.0.0`,同一 WiFi 下的手机/平板/其他电脑直接用
 `http://<本机局域网IP>:7860` 打开即可(启动时控制台会打印,如
@@ -220,7 +220,7 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 
 Then open [http://localhost:7860](http://localhost:7860).
 
-**Windows users**: native Windows support is not verified yet (the GStreamer/PyGObject system stack is the main blocker). Recommended path: **WSL2** (run Ubuntu inside Windows, then follow the Linux steps above — USB passthrough works for the real robot). Scaffolding for native support (`scripts/*.ps1`) is in place — PRs welcome; see the Windows section of [`docs/INSTALL.md`](docs/INSTALL.md).
+**Windows users**: native Windows is supported (the official SDK bundles GStreamer via `gstreamer-bundle` — no manual GTK needed). Run `.\scripts\install_deps.ps1` to set up the environment, then `.\scripts\start.ps1` (sim) or `.\scripts\start.ps1 -Wired` (wired robot). Details in the Windows section of [`docs/INSTALL.md`](docs/INSTALL.md).
 
 **LAN access**: the UI listens on `0.0.0.0` — any phone / tablet / laptop on the same WiFi can open `http://<this-PC's-LAN-IP>:7860` directly (printed in the startup banner). Video feeds, the 3D view and TTS autoplay automatically follow whatever host was used to open the page — zero configuration.
 

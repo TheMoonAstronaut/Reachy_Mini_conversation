@@ -141,34 +141,59 @@ pip install -e ".[dev]"
 pytest tests/smoke_test.py -v   # 部分用例依赖 GStreamer,可能跳过/失败
 ```
 
-### Windows
+### Windows(原生)
 
-#### 方案 A:WSL2(推荐,完整体验)
+**官方 SDK 原生支持 Windows**:`reachy-mini` 的 pip 依赖 `gstreamer-bundle`
+会在安装时自动把 GStreamer(含 PyGObject 绑定)带到 Windows,**无需手动装
+GTK/GStreamer**。
 
-在 Windows 内获得完整 Linux 环境,之后**完全按上文 Linux 章节操作**(仿真/有线真机/USB 透传全部可用):
+#### 步骤 1:一键装环境
 
 ```powershell
-# PowerShell(管理员)一键安装 WSL2 + Ubuntu
-wsl --install
-# 重启后打开 Ubuntu,完成初始用户名设置,然后按本文「Linux(Ubuntu / Debian)完整安装」继续
+# 项目根目录,PowerShell(首次运行脚本若被拦,先执行:
+#   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned)
+.\scripts\install_deps.ps1
 ```
 
-> 真机 USB:WSL2 默认不自动挂载 USB。用 [usbipd-win](https://github.com/dorssel/usbipd-win)
-> (`winget install usbipd`;`usbipd list` 找到机器人设备 → `usbipd bind --busid <N>`
-> → `usbipd attach --wsl --busid <N>`),WSL 内即可见 Reachy 相机/声卡/串口。
+脚本做的事:检查/用 winget 安装 Git 与 Python 3.12 → 创建 venv(有 conda
+则用 conda)→ `pip install -e ".[dev]"` → 验证 CLI 注册。
+> 国内网络慢/断:把脚本里 `$PipIndex` 换成 `https://mirrors.aliyun.com/pypi/simple/`
 
-#### 方案 B:原生 Windows(社区适配中,未验证)
+#### 步骤 2:配置 API Key
 
-脚手架已就位:`scripts/install_deps.ps1`、`scripts/start.ps1`(当前为占位)。
-主要障碍与已知步骤:
+与 Linux 相同,写到 Windows 用户目录的 `~\.reachymini\env.json`:
 
-1. **GStreamer**:官方 Windows 安装包装 runtime + devel;`GST_PLUGIN_PATH` 指向插件目录
-2. **PyGObject**:需 GTK3 Runtime + MSVC Build Tools(cairo/glib 编译链)
-3. **Mujoco**:有官方 Windows wheel,可装
-4. 风险点:`daemon_launcher` 的 GStreamer patch 基于 Linux(unixfd IPC);
-   SDK 在 Windows 走 win32 IPC 路径,**未实测**
+```powershell
+mkdir ~\.reachymini
+notepad ~\.reachymini\env.json   # 粘贴 env.json 内容(Linux 侧那份可直接复制)
+```
 
-完成原生适配后欢迎提 PR 填充两个 .ps1。
+#### 步骤 3:(可选)手部跟随模型
+
+把 Linux 侧的 `~/.cache/reachymini/hand_landmarker.task` 复制到 Windows
+相同位置,或在 PowerShell:
+
+```powershell
+mkdir ~\.cacheeachymini
+curl.exe -L -o ~\.cacheeachymini\hand_landmarker.task `
+  https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+```
+
+#### 步骤 4:启动
+
+```powershell
+.\scripts\start.ps1          # 纯仿真
+.\scripts\start.ps1 -Wired   # 有线真机(机器人 USB 插本机,启动即自动连)
+```
+
+启动后浏览器打开 http://localhost:7860(其他设备用 http://<局域网IP>:7860)。
+
+#### 已知边界
+
+- 相机/音频走 SDK 的 Windows 媒体路径(win32 IPC),daemon 可带媒体运行
+- `local_camera.py`(v4l2)仅 Linux 生效,Windows 上相机自动改走 daemon 媒体
+- 若遇问题先查 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md);首次 pip 安装会
+  触发 gstreamer-bundle 后安装下载(数十 MB),失败时换镜像重跑即可
 
 ### 卸载
 
@@ -226,18 +251,41 @@ No torch / no local ASR — speech recognition uses the cloud Doubao streaming A
 
 The `reachy_mini` SDK is Linux-first. macOS can install Python deps and run unit tests, but `reachy-mini-daemon --sim` (Mujoco + GStreamer) requires Linux.
 
-### Windows
+### Windows (native)
 
-**Option A: WSL2 (recommended, full experience)** — install Ubuntu inside Windows, then follow the Linux section above verbatim (sim / wired robot all work):
+The official SDK natively supports Windows: its pip dependency `gstreamer-bundle` brings GStreamer (with PyGObject bindings) automatically — **no manual GTK/GStreamer install needed**.
+
+**Step 1 — one-shot environment setup:**
 
 ```powershell
-wsl --install   # admin PowerShell, reboot, open Ubuntu, set up user
+# project root, in PowerShell (if script execution is blocked, run once:
+#   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned)
+.\scripts\install_deps.ps1
 ```
 
-> USB for the real robot in WSL2 needs [usbipd-win](https://github.com/dorssel/usbipd-win):
-> `winget install usbipd` → `usbipd list` → `usbipd bind --busid <N>` → `usbipd attach --wsl --busid <N>`.
+This checks/installs Git + Python 3.12 via winget, creates a venv (or uses conda), runs `pip install -e ".[dev]"`, and verifies the CLI.
+> Slow/broken network in China: set `$PipIndex` in the script to `https://mirrors.aliyun.com/pypi/simple/`.
 
-**Option B: Native Windows (community effort, unverified)** — scaffolding exists (`scripts/install_deps.ps1`, `scripts/start.ps1`, placeholders). Known requirements: GStreamer (Windows runtime+devel, set `GST_PLUGIN_PATH`), GTK3 Runtime + MSVC Build Tools for PyGObject, Mujoco (official Windows wheels). Risk: `daemon_launcher`'s GStreamer patch targets Linux unixfd IPC (SDK uses win32 IPC on Windows) — untested. PRs welcome to fill in the .ps1 scripts.
+**Step 2 — API keys:** same as Linux, at `~\.reachymini\env.json` (copy the file from your Linux side).
+
+**Step 3 — (optional) hand-follower model:** copy `hand_landmarker.task` from Linux `~/.cache/reachymini/` to the same path on Windows, or:
+
+```powershell
+mkdir ~\.cacheeachymini
+curl.exe -L -o ~\.cacheeachymini\hand_landmarker.task `
+  https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+```
+
+**Step 4 — launch:**
+
+```powershell
+.\scripts\start.ps1          # pure sim
+.\scripts\start.ps1 -Wired   # wired robot (USB; auto-connects on start)
+```
+
+Then open http://localhost:7860 (or http://<LAN-IP>:7860 from other devices).
+
+**Known boundaries:** camera/audio use the SDK's Windows media path (win32 IPC, daemon runs with media); `local_camera.py` (v4l2) is Linux-only and Windows automatically falls back to daemon media; the first `pip install` triggers a gstreamer-bundle post-install download (tens of MB) — re-run pip with a mirror if it fails.
 
 ### Uninstall
 

@@ -96,7 +96,17 @@ class UsbEyeCamera:
 
     # ---------- camera_stream 生命周期钩子 ----------
     def start(self) -> None:
-        """启动 GStreamer 管线(相机不在时保留重试意愿,走占位图)。"""
+        """启动 GStreamer 管线(相机不在时保留重试意愿,走占位图)。
+
+        Windows 原生(2026-09 适配):v4l2/by-id 是 Linux 专属机制,本类在
+        非 Linux 平台直接保持未运行,消费者回落到 daemon 媒体相机
+        (见 app.py _DaemonMediaFrameProvider,与 on-robot 同款路径)。
+        """
+        import sys
+
+        if sys.platform != "linux":
+            logger.info(f"[usb-eye] 非 Linux 平台({sys.platform}),UsbEyeCamera 禁用")
+            return
         with self._lock:
             self._want_running = True
             if self._running:

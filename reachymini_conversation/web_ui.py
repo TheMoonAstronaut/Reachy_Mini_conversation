@@ -1198,14 +1198,17 @@ def build_ui() -> gr.Blocks:
                 "⚠️ 近静音!" if _rms < 100 else "",
             )
             try:
+                import os as _os
+                import tempfile as _tempfile
                 import wave as _wave
 
-                with _wave.open("/tmp/last_mic_input.wav", "wb") as _w:
+                _dbg_wav = _os.path.join(_tempfile.gettempdir(), "last_mic_input.wav")
+                with _wave.open(_dbg_wav, "wb") as _w:
                     _w.setnchannels(1)
                     _w.setsampwidth(2)
                     _w.setframerate(16000)
                     _w.writeframes(pcm)
-                logger.info("[voice] 调试录音已存 /tmp/last_mic_input.wav")
+                logger.info(f"[voice] 调试录音已存 {_dbg_wav}")
             except Exception as _e:
                 logger.warning("[voice] 调试录音存盘失败: %s", _e)
 
