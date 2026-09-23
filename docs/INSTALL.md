@@ -143,7 +143,32 @@ pytest tests/smoke_test.py -v   # 部分用例依赖 GStreamer,可能跳过/失�
 
 ### Windows
 
-⚠️ 预留适配(脚本模板:`scripts/install_deps.ps1`、`scripts/start.ps1`),尚未完整验证。思路:Visual Studio Build Tools + GStreamer + conda。欢迎 PR。
+#### 方案 A:WSL2(推荐,完整体验)
+
+在 Windows 内获得完整 Linux 环境,之后**完全按上文 Linux 章节操作**(仿真/有线真机/USB 透传全部可用):
+
+```powershell
+# PowerShell(管理员)一键安装 WSL2 + Ubuntu
+wsl --install
+# 重启后打开 Ubuntu,完成初始用户名设置,然后按本文「Linux(Ubuntu / Debian)完整安装」继续
+```
+
+> 真机 USB:WSL2 默认不自动挂载 USB。用 [usbipd-win](https://github.com/dorssel/usbipd-win)
+> (`winget install usbipd`;`usbipd list` 找到机器人设备 → `usbipd bind --busid <N>`
+> → `usbipd attach --wsl --busid <N>`),WSL 内即可见 Reachy 相机/声卡/串口。
+
+#### 方案 B:原生 Windows(社区适配中,未验证)
+
+脚手架已就位:`scripts/install_deps.ps1`、`scripts/start.ps1`(当前为占位)。
+主要障碍与已知步骤:
+
+1. **GStreamer**:官方 Windows 安装包装 runtime + devel;`GST_PLUGIN_PATH` 指向插件目录
+2. **PyGObject**:需 GTK3 Runtime + MSVC Build Tools(cairo/glib 编译链)
+3. **Mujoco**:有官方 Windows wheel,可装
+4. 风险点:`daemon_launcher` 的 GStreamer patch 基于 Linux(unixfd IPC);
+   SDK 在 Windows 走 win32 IPC 路径,**未实测**
+
+完成原生适配后欢迎提 PR 填充两个 .ps1。
 
 ### 卸载
 
@@ -197,9 +222,22 @@ pytest tests/smoke_test.py -v           # verify install
 
 No torch / no local ASR — speech recognition uses the cloud Doubao streaming API.
 
-### macOS / Windows
+### macOS
 
-The `reachy_mini` SDK is Linux-first. macOS can install Python deps and run unit tests, but `reachy-mini-daemon --sim` (Mujoco + GStreamer) requires Linux. Windows adaptation is scaffolded (`scripts/install_deps.ps1`, `scripts/start.ps1`) but not fully verified — PRs welcome.
+The `reachy_mini` SDK is Linux-first. macOS can install Python deps and run unit tests, but `reachy-mini-daemon --sim` (Mujoco + GStreamer) requires Linux.
+
+### Windows
+
+**Option A: WSL2 (recommended, full experience)** — install Ubuntu inside Windows, then follow the Linux section above verbatim (sim / wired robot all work):
+
+```powershell
+wsl --install   # admin PowerShell, reboot, open Ubuntu, set up user
+```
+
+> USB for the real robot in WSL2 needs [usbipd-win](https://github.com/dorssel/usbipd-win):
+> `winget install usbipd` → `usbipd list` → `usbipd bind --busid <N>` → `usbipd attach --wsl --busid <N>`.
+
+**Option B: Native Windows (community effort, unverified)** — scaffolding exists (`scripts/install_deps.ps1`, `scripts/start.ps1`, placeholders). Known requirements: GStreamer (Windows runtime+devel, set `GST_PLUGIN_PATH`), GTK3 Runtime + MSVC Build Tools for PyGObject, Mujoco (official Windows wheels). Risk: `daemon_launcher`'s GStreamer patch targets Linux unixfd IPC (SDK uses win32 IPC on Windows) — untested. PRs welcome to fill in the .ps1 scripts.
 
 ### Uninstall
 
