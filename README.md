@@ -149,7 +149,7 @@ chmod 600 ~/.reachymini/env.json
 └──────────────────────────────────────┘
 ```
 
-详细架构见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),设计文档:[`plan.md`](plan.md)、[`SPEC_V2.md`](SPEC_V2.md)。
+详细架构见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
 ### 故障排查
 
@@ -165,8 +165,7 @@ chmod 600 ~/.reachymini/env.json
 ### 贡献 & 许可证
 
 - 许可证:[Apache 2.0](LICENSE)(与 [reachy_mini](https://github.com/pollen-robotics/reachy_mini) 一致)
-- 开发:`pytest tests/`(288 用例);代码风格 `black` + `ruff`(line-length 100)
-- 设计文档:[`plan.md`](plan.md)、[`SPEC_V2.md`](SPEC_V2.md)
+- 开发:`pytest tests/`(290 用例);代码风格 `black` + `ruff`(line-length 100)
 
 ---
 
@@ -250,10 +249,21 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 ### Contributing / License
 
 - License: [Apache 2.0](LICENSE)(same as [reachy_mini](https://github.com/pollen-robotics/reachy_mini))
-- Dev: `pytest tests/` (288 cases); code style `black` + `ruff` (line-length 100)
-- Design docs: [`plan.md`](plan.md), [`SPEC_V2.md`](SPEC_V2.md)
+- Dev: `pytest tests/` (290 cases); code style `black` + `ruff` (line-length 100)
 
 ---
+
+## Roadmap
+
+- ✅ 已完成:Web UI + Mujoco 仿真镜像、豆包 ASR 语音管线、声源定位、
+  手部跟随、LLM 工具调用、局域网访问、三形态命令隔离(`--sim` /
+  `--wired` / `--robot`)、on-robot 部署(无线版树莓派本体)
+- 🟡 P8:Windows 完整适配(脚本模板已就位,待真机验证)
+- 🔵 P9.2 后续:on-robot 的手部跟随降级方案(浏览器端 JS MediaPipe,
+  规避 CM4 缺 AES 指令无法运行 MediaPipe Python 的限制)
+- 已知硬件向限制:on-robot 模式下机器人麦克风若录音全零,按
+  [`docs/ROBOT.md`](docs/ROBOT.md) 麦克风排障节处理(FPC 排线插反为
+  官方首位原因)
 
 ## Related projects
 

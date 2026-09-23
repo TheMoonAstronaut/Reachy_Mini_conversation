@@ -875,7 +875,7 @@ def build_ui() -> gr.Blocks:
             '<div class="rm-footer">'
             "<span>📍 项目:<code>Reachy Mini Conversation</code></span>"
             "<span>📋 <code>docs/INSTALL.md</code> 安装指南</span>"
-            "<span>🗺 <code>plan.md</code> 设计文档</span>"
+            "<span>🗺 <code>docs/ARCHITECTURE.md</code></span>"
             "<span>🧪 <code>pytest tests/</code></span>"
             "</div>"
         )
