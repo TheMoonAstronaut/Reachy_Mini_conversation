@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — 架构说明 / Architecture Reference
 
-> 设计文档:[`plan.md`](../plan.md) / [`SPEC_V2.md`](../SPEC_V2.md)
+> 路线规划见根目录 README「Roadmap」一节
 
 ---
 
@@ -130,7 +130,7 @@
   - Mujoco 视频流 GStreamer→MJPEG 推流
 - **状态广播**:`StateBus` → WebSocket `/ws` → 前端订阅
 
-### 关键设计决策(从 plan.md §4 摘)
+### 关键设计决策
 
 #### MirrorOrchestrator(决策 9)
 
