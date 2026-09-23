@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -156,12 +157,11 @@ _BG_PERFORM_TOOLS = frozenset(
     {"dance", "play_emotion", "idle_sway", "move_head", "look_at_sound"}
 )
 # 同名后台线程注册表:同工具上一个还在跑时,新调用直接跳过(防叠跳)
-_BG_THREADS: dict[str, "threading.Thread"] = {}
+_BG_THREADS: dict[str, threading.Thread] = {}
 
 
 def _run_tool_background(tool_name: str, tool: Any, args: dict[str, Any], deps: ToolDependencies) -> dict[str, Any]:
     """把表演类工具放入后台 daemon 线程,立即返回 started(见上方注释)。"""
-    import threading
 
     old = _BG_THREADS.get(tool_name)
     if old is not None and old.is_alive():

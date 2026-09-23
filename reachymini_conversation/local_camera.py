@@ -23,8 +23,6 @@ import logging
 import threading
 import time
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 # v4l2 by-id 名字特征(Sunplus 的 Reachy 眼睛相机)

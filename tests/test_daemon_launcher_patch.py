@@ -63,7 +63,7 @@ def _make_fake_module() -> types.SimpleNamespace:
     return types.SimpleNamespace(MujocoBackend=_FakeMujocoBackend)
 
 
-def _fake_gst_sender_module(captured: dict, backend: "_FakeMujocoBackend"):
+def _fake_gst_sender_module(captured: dict, backend: _FakeMujocoBackend):
     """假 GStreamerUDPCamera 模块:构造时捕获 kwargs,send_frame 一帧后停循环。"""
     fake_mod = types.ModuleType("reachy_mini.media.gstreamer_udp_camera")
 

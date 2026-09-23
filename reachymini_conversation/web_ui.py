@@ -642,7 +642,7 @@ def build_ui() -> gr.Blocks:
                     '<span style="font-weight:400;text-transform:none;letter-spacing:0;">'
                     '(左键旋转 · 右键平移 · 滚轮缩放)</span></div>'
                 )
-                viewer_3d_html = gr.HTML(
+                gr.HTML(  # noqa: F841 组件无需引用(3D 视图由 js_on_load 注入)
                     value=_viewer_3d_html(),
                     js_on_load=_VIEWER_3D_JS_ON_LOAD,
                     min_height=490,

@@ -144,7 +144,7 @@ class SceneUdpReceiver:
         return Gst.State.NULL
 
     # ---------- 拉帧线程 ----------
-    def _pull_loop(self, Gst) -> None:
+    def _pull_loop(self, gst) -> None:
         """持续从 appsink 拉最新 JPEG 帧,覆盖式写入缓冲(只保留最新一帧)。"""
         sink = self._pipeline.get_by_name("scene_sink")
         if sink is None:

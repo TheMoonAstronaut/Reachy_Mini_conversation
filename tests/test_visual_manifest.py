@@ -67,7 +67,7 @@ def model_and_random_state():
     # qpos 地址(与 XML 声明序一致;yaw=0, stewart_i 穿插被动关节, 天线在最后)
     q = {"yaw": 0.37, "stewart": [0.11, -0.23, 0.31, -0.17, 0.27, -0.13], "ant": [0.42, -0.35]}
     d.qpos[0] = q["yaw"]
-    for addr, v in zip([1, 6, 11, 16, 21, 26], q["stewart"]):
+    for addr, v in zip([1, 6, 11, 16, 21, 26], q["stewart"], strict=False):
         d.qpos[addr] = v
     d.qpos[35], d.qpos[36] = q["ant"]
     mujoco.mj_forward(m, d)
@@ -206,7 +206,7 @@ def test_head_geom_locals_end_to_end(model_and_random_state):
     ]
     assert len(gis) == 2
 
-    for e, gi in zip(entries, gis):
+    for e, gi in zip(entries, gis, strict=False):
         W_mine = (S_world @ _T(e["pos"], e["quat_xyzw"]) @
                   np.hstack([v_raw, np.ones((len(v_raw), 1))]).T).T[:, :3]
         W_mj = (d.geom_xmat[gi].reshape(3, 3) @ v_proc.T).T + d.geom_xpos[gi]
@@ -240,7 +240,7 @@ def test_stewart_horn_kinematics(model_and_random_state):
         "dc15_a01_horn_dummy", "dc15_a01_horn_dummy_2", "dc15_a01_horn_dummy_3",
         "dc15_a01_horn_dummy_4", "dc15_a01_horn_dummy_5", "dc15_a01_horn_dummy_6",
     ]
-    for horn, body_name, theta in zip(manifest["groups"]["stewart_horns"], horn_bodies, q["stewart"]):
+    for horn, body_name, theta in zip(manifest["groups"]["stewart_horns"], horn_bodies, q["stewart"], strict=False):
         f = horn["frame_in_body"]
         pred = body_world @ _T(f["pos"], f["quat_xyzw"]) @ _rz(theta)
         gt = _body_T(d, m, body_name)

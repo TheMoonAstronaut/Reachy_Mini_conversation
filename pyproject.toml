@@ -119,6 +119,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests:允许 unused imports(mock 用)
 "tests/*" = ["F401", "F811"]
+# 几何/矩阵运算惯用单字母符号(A/B/P/Q/R/T = 位姿矩阵,R = scipy Rotation)
+"tests/test_visual_manifest.py" = ["F401", "F811", "N803", "N817"]
+"tools/export_visual_manifest.py" = ["N803"]
 # Scripts:工具脚本,允许 print / assert
 "scripts/*" = ["T201"]
 

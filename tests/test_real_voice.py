@@ -24,8 +24,8 @@ import pytest  # noqa: E402
 
 from reachymini_conversation.mirror_orchestrator import MirrorOrchestrator  # noqa: E402
 from reachymini_conversation.real_voice import RealVoiceLoop, make_tts_audio_router  # noqa: E402
-from reachymini_conversation.voice_loop import EnergyVAD  # noqa: E402
 from reachymini_conversation.state_bus import get_state_bus, reset_state_bus  # noqa: E402
+from reachymini_conversation.voice_loop import EnergyVAD  # noqa: E402
 
 
 class _FakeMedia:

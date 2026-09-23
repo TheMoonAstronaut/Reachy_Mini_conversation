@@ -34,10 +34,12 @@ from reachymini_conversation.mirror_orchestrator import MirrorOrchestrator
 from reachymini_conversation.sound_localizer import SoundLocalizer
 from reachymini_conversation.state_bus import get_state_bus
 from reachymini_conversation.utils.camera_stream import create_camera_stream_app
+from reachymini_conversation.web_ui import (
+    _RM_LAN_JS as REACHY_LAN_JS,
+)
 from reachymini_conversation.web_ui import (  # noqa: E402
     REACHY_CSS,
     REACHY_THEME,
-    _RM_LAN_JS as REACHY_LAN_JS,
     build_ui,
 )
 
@@ -179,12 +181,11 @@ class ConversationApp(ReachyMiniApp):
 
         # 2.7 注入 ToolDependencies 到 web_ui(P7 真 function calling 用)
         try:
-            from reachymini_conversation.web_ui import set_sound_localizer, set_tool_deps
-            from tools.core_tools import ToolDependencies
-
             # V2 Fix B:注入镜像适配器而不是裸 sim_mini —— 工具动作(dance/
             # play_emotion/move_head/look_at_sound)同步打到 sim + real 双实例。
             from reachymini_conversation.mirror_orchestrator import MirroredToolTarget
+            from reachymini_conversation.web_ui import set_sound_localizer, set_tool_deps
+            from tools.core_tools import ToolDependencies
 
             deps = ToolDependencies(
                 reachy_mini=MirroredToolTarget(self._orchestrator),
@@ -232,12 +233,12 @@ class ConversationApp(ReachyMiniApp):
                 ).start()
 
             # V2.4:真机语音环路(real 模式 + 语音模式时采真机麦克风)
+            from reachymini_conversation.real_voice import RealVoiceLoop
             from reachymini_conversation.web_ui import (
                 get_pipeline,
                 get_tool_deps_global,
                 set_orchestrator,
             )
-            from reachymini_conversation.real_voice import RealVoiceLoop
 
             set_orchestrator(self._orchestrator)
             pipeline = get_pipeline()
