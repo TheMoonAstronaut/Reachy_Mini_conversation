@@ -40,7 +40,7 @@ Reachy Mini Conversation 是一个开源的对话机器人应用,为 Pollen Robo
 
 ```bash
 # 1. 克隆仓库(目录名保持 Reachy_Mini_conversation)
-git clone https://github.com/<your-org>/Reachy_Mini_conversation.git
+git clone https://github.com/TheMoonAstronaut/Reachy_Mini_conversation.git
 cd Reachy_Mini_conversation
 
 # 2. 安装系统依赖(cairo / gstreamer / ffmpeg)
@@ -195,7 +195,7 @@ Reachy Mini Conversation is an open-source conversational robot app for the Poll
 **Prerequisites**: Ubuntu / Debian, Python 3.12, sudo.
 
 ```bash
-git clone https://github.com/<your-org>/Reachy_Mini_conversation.git
+git clone https://github.com/TheMoonAstronaut/Reachy_Mini_conversation.git
 cd Reachy_Mini_conversation
 
 sudo ./scripts/install_deps.sh

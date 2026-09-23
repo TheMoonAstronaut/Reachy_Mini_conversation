@@ -24,7 +24,7 @@
 #### 步骤 1:克隆仓库
 
 ```bash
-git clone https://github.com/<your-org>/Reachy_Mini_conversation.git
+git clone https://github.com/TheMoonAstronaut/Reachy_Mini_conversation.git
 cd Reachy_Mini_conversation
 ```
 
@@ -173,7 +173,7 @@ pip uninstall reachymini_conversation
 ### Linux (Ubuntu / Debian)
 
 ```bash
-git clone https://github.com/<your-org>/Reachy_Mini_conversation.git
+git clone https://github.com/TheMoonAstronaut/Reachy_Mini_conversation.git
 cd Reachy_Mini_conversation
 
 sudo ./scripts/install_deps.sh          # system libs (cairo/gstreamer/ffmpeg)

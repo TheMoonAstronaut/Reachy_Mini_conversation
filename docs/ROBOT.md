@@ -50,7 +50,7 @@ sudo apt install -y \
 ## 步骤 3:部署项目
 
 ```bash
-git clone https://github.com/<your-org>/Reachy_Mini_conversation.git
+git clone https://github.com/TheMoonAstronaut/Reachy_Mini_conversation.git
 cd Reachy_Mini_conversation
 python3 -m venv ~/.venv/reachy
 source ~/.venv/reachy/bin/activate

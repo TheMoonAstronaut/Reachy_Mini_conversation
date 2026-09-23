@@ -57,9 +57,9 @@ dev = ["pytest", "black", "ruff", "mypy"]
 
 [project.urls]
 # 等用户定 GitHub 仓库后填
-# Homepage = "https://github.com/<user>/reachy-mini-conversation"
-# Issues = "https://github.com/<user>/reachy-mini-conversation/issues"
-# Changelog = "https://github.com/<user>/reachy-mini-conversation/blob/main/CHANGELOG.md"
+# Homepage = "https://github.com/TheMoonAstronaut/reachy-mini-conversation"
+# Issues = "https://github.com/TheMoonAstronaut/reachy-mini-conversation/issues"
+# Changelog = "https://github.com/TheMoonAstronaut/reachy-mini-conversation/blob/main/CHANGELOG.md"
 
 # =============================================================================
 # CLI 入口
