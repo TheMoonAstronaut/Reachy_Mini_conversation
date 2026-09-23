@@ -152,12 +152,21 @@ class ConversationApp(ReachyMiniApp):
             )
 
             def _hand_frame_getter() -> bytes | None:
-                """取帧源:真机已连接 → 真机 USB 相机(真手在机器人镜头前);
+                """取帧源:真机已连接 → 真机相机帧;
                 否则退回 sim 眼睛相机(合成画面,纯仿真下永远检测不到手,
-                保持可用不崩)。真机相机未就绪返回 None,本轮跳过。"""
+                保持可用不崩)。真机相机未就绪返回 None,本轮跳过。
+
+                帧来源按平台二选一(2026-09 跨平台化):
+                - Linux wired:UsbEyeCamera(v4l2 直连)
+                - Windows wired / on-robot:daemon 媒体(sim_mini 即真机本体
+                  实例或其 localhost client,media.get_frame_jpeg 走 IPC)
+                """
                 if self._orchestrator is not None and self._orchestrator.real_mini is not None:
                     try:
-                        frame = self._usb_eye.get_frame_jpeg()
+                        if sys.platform == "linux":
+                            frame = self._usb_eye.get_frame_jpeg()
+                        else:
+                            frame = reachy_mini.media.get_frame_jpeg()
                         if frame:
                             return frame
                     except Exception as e:
@@ -286,14 +295,12 @@ class ConversationApp(ReachyMiniApp):
 
             scene_receiver = SceneUdpReceiver()
 
-            # V2 Fix D:真机眼睛相机(USB 直连,懒开;没插真机就走占位图)。
-            # 复用 §2.5 的实例(与手部跟随共享抓帧缓存)。
-            # pure_real(on-robot)时换 daemon 媒体源:无线版相机是 CSI,
-            # 由本体 daemon 媒体服务持有,PC 那套 UsbEyeCamera(by-id 找
-            # "Reachy_Mini_Camera")在树莓派上永远找不到(2026-09-20 实测
-            # 日志 "[usb-eye] 未找到 Reachy 相机");daemon 媒体经 IPC 直出
-            # JPEG,与 /camera_feed 的消费接口完全一致。
-            if run_mode == "pure_real":
+            # V2 Fix D:真机眼睛相机源选择(2026-09 跨平台化):
+            # - wired + Linux:UsbEyeCamera(v4l2 by-id 直连,延迟最低)
+            # - pure_real(on-robot):daemon 媒体(CSI 相机由本体 daemon 持有)
+            # - wired + Windows:v4l2 不存在 → 同 daemon 媒体路径
+            #   (daemon 经 gstreamer-bundle 可带媒体运行,win32 IPC 直出 JPEG)
+            if run_mode == "pure_real" or sys.platform != "linux":
                 _real_frame_provider = _DaemonMediaFrameProvider(reachy_mini)
             else:
                 _real_frame_provider = self._usb_eye

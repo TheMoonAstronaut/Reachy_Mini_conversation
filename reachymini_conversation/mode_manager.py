@@ -55,7 +55,17 @@ class RealDaemonRunner:
     时,必须先 TERM/KILL 清理僵尸并等端口释放,才允许新起。
     """
 
-    def __init__(self, port: int = REAL_DAEMON_PORT, log_path: str = "/tmp/reachy-daemon-real.log"):
+    def __init__(
+        self,
+        port: int = REAL_DAEMON_PORT,
+        log_path: str | None = None,
+    ):
+        # None → 系统临时目录(Windows 上 /tmp 不存在)
+        if log_path is None:
+            import os
+            import tempfile
+
+            log_path = os.path.join(tempfile.gettempdir(), "reachy-daemon-real.log")
         self.port = port
         self.log_path = log_path
         self._proc: subprocess.Popen | None = None
@@ -154,9 +164,18 @@ class RealDaemonRunner:
             "--log-level", "INFO",
         ]
         log_f = open(self.log_path, "a", encoding="utf-8")
+        popen_kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            # Windows 无进程组会话概念:新进程组 + 不随父窗口退出
+            popen_kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+        else:
+            # 独立进程组,app 退出不连带;停止由 stop() 负责
+            popen_kwargs["start_new_session"] = True
         self._proc = subprocess.Popen(
-            cmd, stdout=log_f, stderr=subprocess.STDOUT,
-            start_new_session=True,  # 独立进程组,app 退出不连带;停止由 stop() 负责
+            cmd, stdout=log_f, stderr=subprocess.STDOUT, **popen_kwargs
         )
         logger.info(f"[real-daemon] 已启动 PID {self._proc.pid} @ :{self.port},日志 {self.log_path}")
 
@@ -280,7 +299,7 @@ class ModeManager:
                 if not daemon.wait_ready():
                     raise RuntimeError(
                         "真机 daemon 未就绪。排查:① 真机电机电源是否接通并打开 "
-                        "② USB 线是否插牢 ③ /tmp/reachy-daemon-real.log 末尾有无 "
+                        "② USB 线是否插牢 ③ daemon 日志(reachymini_conversation 的 logs/ 或系统临时目录)末尾有无 "
                         "'No motors detected'"
                     )
 
