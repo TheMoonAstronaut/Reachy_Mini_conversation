@@ -103,6 +103,20 @@ source ~/.venv/reachy/bin/activate
 然后同一 WiFi 的任意设备浏览器打开 `http://<机器人IP>:7860`
 (启动横幅会打印;机器人 IP 可在路由器设备列表或 `hostname -I` 查看)。
 
+## 麦克风排障(重要)
+
+若机器人自检 / arecord 录音为**纯零**(播放正常),这是无线版最常见的
+硬件坑,官方 Troubleshooting 首位原因:**麦克风 FPC 排线插反**
+(外观看不出,需拔下翻面重插;彻底断电再上电)。其次:FPC 线损坏
+(官方有换线教程)、固件 < 2.1.4(跑官方 `assets/firmware/update.sh`)。
+
+快速自检:
+```bash
+arecord -D reachymini_audio_src -f S16_LE -r 16000 -c 2 -d 4 /tmp/t.wav
+python3 -c "import soundfile as sf, numpy as np; d,_=sf.read('/tmp/t.wav'); print(np.abs(d).max())"
+# 输出 0.0 = 麦克风链路无数据 → 按上面三步走
+```
+
 ## 已知边界
 
 | 项 | on-robot 状态 |
