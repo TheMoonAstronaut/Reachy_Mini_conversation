@@ -28,7 +28,7 @@ Reachy Mini Conversation 是一个开源的对话机器人应用,为 Pollen Robo
 - 💤 **待机微动**:空闲时呼吸式头部微动 + 天线摆动(官方 BreathingMove 移植),说话时自动切换为音频驱动的摆头
 - 🌐 **Gradio Web UI**:浏览器打开 `localhost:7860` 即可使用,深色主题
 
-**适用硬件**:Reachy Mini(USB 接线版 / 无线 RPi 版均兼容;本应用运行于用户 PC,无线版 RPi 只跑 daemon)。
+**适用硬件**:Reachy Mini Lite(有线 USB)与无线版(RPi CM4 本体);仿真模式无需硬件。三种形态一条命令隔离:`--sim` / `--wired` / `--robot`(见下文)。
 
 ### 效果展示
 
@@ -82,7 +82,7 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 > https 会报"连接不安全")。打不开先查
 > [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) 第 0 节。
 
-**连接真机**:给 Reachy Mini 通电 → 顶栏点「⚡ 连接真机」(有线 USB 自动识别;无线版选下拉「真机+仿真(无线)」)。连接后语音对话、手部跟随、真机摄像头画面自动可用。
+**连接真机(有线)**:给 Reachy Mini 通电 → 顶栏点「⚡ 连接真机」(有线 USB 自动识别,或 `./scripts/start.sh --wired` 启动即自动连)。连接后语音对话、手部跟随、真机摄像头画面自动可用。
 
 **跑在机器人本体上(无线版)**:无线版内置树莓派 CM4,可以直接把项目
 部署到机器人上,同一 WiFi 下任意设备打开 UI 控制,无需 PC 常驻 —— 见
@@ -184,7 +184,7 @@ Reachy Mini Conversation is an open-source conversational robot app for the Poll
 - 💤 **Idle motion**: breathing-style micro-movements ported from the official BreathingMove; audio-reactive wobble while speaking
 - 🌐 **Gradio Web UI**: open `localhost:7860` in a browser, dark theme
 
-**Supported hardware**: Reachy Mini (USB wired **and** wireless RPi variants; the app runs on the user's PC, the wireless RPi only runs the daemon).
+**Supported hardware**: Reachy Mini Lite (USB wired) and the wireless variant (RPi CM4); pure simulation needs no hardware. Three modes via separate commands: `--sim` / `--wired` / `--robot`.
 
 ### Demo
 
@@ -220,7 +220,7 @@ Then open [http://localhost:7860](http://localhost:7860).
 
 > ⚠️ **Security note**: a LAN link means **anyone on the same network can control the robot**. Use only on trusted WiFi.
 
-**Connect the real robot**: power it on → click "⚡ 连接真机" in the top bar (wired USB auto-detected; wireless: pick "真机+仿真(无线)" in the dropdown).
+**Connect the real robot (wired)**: power it on → click "⚡ 连接真机" in the top bar (wired USB auto-detected; or launch with `./scripts/start.sh --wired` for auto-connect).
 
 ### Configure API keys
 
