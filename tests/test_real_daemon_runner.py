@@ -91,7 +91,10 @@ def popen_spy(monkeypatch):
             return None  # 活着
 
     def _spy(cmd, **kwargs):
-        if "-c" in cmd:
+        # 假 daemon helper 的 -c 脚本含 serve_forever;真 daemon 命令经
+        # reachymini_conversation 包装启动(runpy)—— 按内容区分转发/替换。
+        joined = " ".join(str(a) for a in cmd)
+        if "serve_forever" in joined:
             return real_popen(cmd, **kwargs)
         calls.append({"cmd": cmd, "kwargs": kwargs})
         return _FakeProc()
@@ -147,8 +150,10 @@ class TestStartZombieReaping:
 
 
 class TestStopSemantics:
-    def test_stop_kills_own_but_not_adopted(self, popen_spy, tmp_path) -> None:
-        """收养语义不回归:收养的 daemon stop() 不杀;自己起的 stop() 杀。"""
+    def test_stop_kills_own_and_adopted(self, popen_spy, tmp_path) -> None:
+        """收养/自己起的 daemon stop() 都要回收:点「断开真机」= 释放真机
+        (2026-09-28 行为变更:收养不杀 → 断开没反应、机器人不休眠、
+        后台进程残留,用户实测反馈)。"""
         port = _PORT_BASE + 5
         healthy = _start_fake_daemon(port, "running")
         runner = RealDaemonRunner(port=port, log_path=str(tmp_path / "d.log"))
@@ -156,7 +161,8 @@ class TestStopSemantics:
             runner.start()
             assert runner._adopted is True
             runner.stop()
-            assert healthy.poll() is None, "收养的 daemon stop 时必须保留"
+            assert healthy.poll() is not None, "收养的 daemon stop 后应被回收"
         finally:
-            healthy.terminate()
-            healthy.wait(timeout=5)
+            if healthy.poll() is None:
+                healthy.terminate()
+                healthy.wait(timeout=5)

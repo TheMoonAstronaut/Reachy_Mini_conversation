@@ -74,8 +74,9 @@ class TestNormalizeFallback:
         wav = tmp_path / "quiet.wav"
         _make_quiet_wav(wav)
         before = wav.read_bytes()
-        monkeypatch.setattr(shutil, "which", lambda _name: None)
-        EdgeTTS._normalize_loudness(str(wav))  # 不 crash
+        # 模拟"任何来源都没有 ffmpeg"(PATH 无 + imageio-ffmpeg 回退也无)
+        monkeypatch.setattr(EdgeTTS, "_find_ffmpeg", staticmethod(lambda: None))
+        EdgeTTS._normalize_loudness(str(wav))  # 不应 crash
         assert wav.read_bytes() == before
 
     @pytest.mark.skipif(not _HAS_FFMPEG, reason="ffmpeg 不在 PATH")

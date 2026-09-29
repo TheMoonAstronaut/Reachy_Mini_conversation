@@ -35,6 +35,12 @@ class _FakeMedia:
     def push_audio_sample(self, pcm) -> None:
         self.pushed.append(np.asarray(pcm))
 
+    def start_recording(self) -> None:
+        pass
+
+    def stop_recording(self) -> None:
+        pass
+
 
 class _FakeMini:
     def __init__(self) -> None:

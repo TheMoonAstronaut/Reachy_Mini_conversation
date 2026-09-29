@@ -297,7 +297,9 @@ def test_sim_feed_fallback_when_media_always_fails():
         chunks = []
         try:
             for _ in range(5):
-                chunks.append(await asyncio.wait_for(gen.__anext__(), timeout=3.0))
+                # 首帧前有 FALLBACK_AFTER_N_MISSES(30)次 ~0.1s 重试,
+                # Windows 定时器粒度(~15.6ms)会推到 ~3.5s,超时留足余量
+                chunks.append(await asyncio.wait_for(gen.__anext__(), timeout=8.0))
         except (asyncio.TimeoutError, StopAsyncIteration):
             pass
         return chunks

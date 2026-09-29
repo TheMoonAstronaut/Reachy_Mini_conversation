@@ -111,6 +111,7 @@ def test_mediapipe_new_api():
 def test_config_default_when_env_missing(tmp_path, monkeypatch):
     """env.json 不存在时,config 用默认值。"""
     monkeypatch.setenv("HOME", str(tmp_path))  # 隔离 ~/.reachymini
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows 下 Path.home() 走 USERPROFILE
     # 强制重载
     import importlib
 
@@ -130,6 +131,7 @@ def test_config_default_when_env_missing(tmp_path, monkeypatch):
 def test_config_loads_from_env_json(tmp_path, monkeypatch):
     """env.json 存在时,正确加载。"""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows 下 Path.home() 走 USERPROFILE
     env_path = tmp_path / ".reachymini" / "env.json"
     env_path.parent.mkdir(parents=True)
     env_path.write_text(
@@ -161,6 +163,7 @@ def test_config_loads_from_env_json(tmp_path, monkeypatch):
 def test_config_handles_corrupted_env(tmp_path, monkeypatch):
     """env.json 损坏时不报错,回退默认。"""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows 下 Path.home() 走 USERPROFILE
     env_path = tmp_path / ".reachymini" / "env.json"
     env_path.parent.mkdir(parents=True)
     env_path.write_text("{ not valid json")
@@ -191,9 +194,14 @@ def test_config_no_funasr_block():
 def test_reachy_mini_conversation_help():
     """reachy-mini-conversation --help 输出正常(CLI 注册成功)。"""
     import subprocess
+    import sysconfig
 
+    # 直接从当前解释器的 scripts 目录找入口脚本(Windows 上 PATH 未必含 envs\...\Scripts)
+    script = Path(sysconfig.get_path("scripts")) / "reachy-mini-conversation"
+    if sys.platform == "win32":
+        script = script.with_suffix(".exe")
     result = subprocess.run(
-        ["reachy-mini-conversation", "--help"],
+        [str(script), "--help"],
         capture_output=True,
         text=True,
         timeout=10,

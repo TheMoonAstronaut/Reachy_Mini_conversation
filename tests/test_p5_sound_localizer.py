@@ -180,8 +180,9 @@ def test_sound_localizer_returns_to_center_after_silence():
         sl.start()
         sl.set_enabled(True)  # V2 Fix A:跟随默认关,本测试显式开启
 
-        # 等足够长时间触发回中(200ms 超时 + 几次 tick)
-        time.sleep(0.6)
+        # 等足够长时间触发回中(SoundLocalizer 最低 0.5s 回中超时 +
+        # Windows Event.wait ~15.6ms 粒度,留足余量)
+        time.sleep(1.2)
 
         sl.stop(timeout=2.0)
     finally:

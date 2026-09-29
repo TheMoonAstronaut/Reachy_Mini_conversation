@@ -29,6 +29,13 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from reachymini_conversation.local_camera import UsbEyeCamera  # noqa: E402
 
+# local_camera 走 v4l2(/dev/v4l/by-id),仅 Linux 生效;
+# Windows 上真机相机自动改走 daemon 媒体链(见 docs/INSTALL.md)。
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="local_camera (v4l2) 仅 Linux 生效,Windows 走 daemon 媒体",
+)
+
 _CREATED: list[UsbEyeCamera] = []
 
 

@@ -91,6 +91,10 @@ def test_save_settings_writes_env_json(tmp_path, monkeypatch):
     """save_settings() 应写 ~/.reachymini/env.json,0600,字段正确。"""
     # 隔离 ~/.reachymini
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Windows 下 Path.home()/expanduser 优先 USERPROFILE,只 patch HOME
+    # 会写到真实 ~/.reachymini/env.json(2026-09-29 实测:跑测试把用户
+    # 真实配置覆盖成占位值,必须两个都隔离)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     from reachymini_conversation.utils.env_loader import (
         DEFAULT_ENV,
@@ -127,9 +131,10 @@ def test_save_settings_writes_env_json(tmp_path, monkeypatch):
     assert path.exists()
     assert path == get_env_json_path()
 
-    # 0600 权限
-    mode = oct(os.stat(path).st_mode & 0o777)
-    assert mode == oct(0o600), f"expected 0o600, got {mode}"
+    # 0600 权限(Windows 无 POSIX mode bits,env_loader 里 chmod 已忽略,跳过)
+    if sys.platform != "win32":
+        mode = oct(os.stat(path).st_mode & 0o777)
+        assert mode == oct(0o600), f"expected 0o600, got {mode}"
 
     # 写入了正确字段
     with open(path) as f:
@@ -144,6 +149,10 @@ def test_save_settings_writes_env_json(tmp_path, monkeypatch):
 def test_save_settings_empty_keys_dont_overwrite(tmp_path, monkeypatch):
     """留空 = 不修改(用户友好)。"""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Windows 下 Path.home()/expanduser 优先 USERPROFILE,只 patch HOME
+    # 会写到真实 ~/.reachymini/env.json(2026-09-29 实测:跑测试把用户
+    # 真实配置覆盖成占位值,必须两个都隔离)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     from reachymini_conversation.utils.env_loader import (
         load_env,
@@ -187,6 +196,10 @@ def test_save_settings_empty_keys_dont_overwrite(tmp_path, monkeypatch):
 def test_build_ui_loads_existing_env_values(tmp_path, monkeypatch):
     """build_ui() 时,设置面板 Textbox 应反映 env.json 当前值。"""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Windows 下 Path.home()/expanduser 优先 USERPROFILE,只 patch HOME
+    # 会写到真实 ~/.reachymini/env.json(2026-09-29 实测:跑测试把用户
+    # 真实配置覆盖成占位值,必须两个都隔离)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     # 写一个 env.json
     env_path = tmp_path / ".reachymini" / "env.json"
