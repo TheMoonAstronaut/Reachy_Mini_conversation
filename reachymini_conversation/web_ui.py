@@ -804,7 +804,7 @@ def build_ui() -> gr.Blocks:
                 with gr.Accordion("⚙️ 设置(API Key / Model)", open=False):
                     gr.Markdown(
                         "_编辑后点 **保存** → 写到 `~/.reachymini/env.json`(0600)。"
-                        "改完需 **重启** 进程生效。_"
+                        "新配置**下一条消息起即时生效**,无需重启进程。_"
                     )
 
                     # 从 env.json 读当前值,缺则用 default
@@ -813,11 +813,21 @@ def build_ui() -> gr.Blocks:
                     _asr = _cur.get("doubao_asr", DEFAULT_ENV["doubao_asr"])
                     _tts = _cur.get("edge_tts", DEFAULT_ENV["edge_tts"])
 
+                    def _key_hint(k: str) -> str:
+                        """已配置时提示 key 尾号(密码框掩码看不出是否已配置,
+                        用户误以为丢配置而反复重填)。2026-09-28 实测。"""
+                        return (
+                            f"已配置(…{k[-4:]}),留空 = 不修改"
+                            if k
+                            else "未配置,保存后生效(无需重启)"
+                        )
+
                     llm_api_key_input = gr.Textbox(
                         label="豆包 LLM API Key",
                         type="password",
                         value=_llm.get("api_key", ""),
                         placeholder="留空 = 不修改",
+                        info=_key_hint(str(_llm.get("api_key", ""))),
                     )
                     llm_base_url_input = gr.Textbox(
                         label="豆包 LLM Base URL",
@@ -826,12 +836,15 @@ def build_ui() -> gr.Blocks:
                     llm_model_input = gr.Textbox(
                         label="模型 ID",
                         value=_llm.get("model", DEFAULT_ENV["doubao_llm"]["model"]),
+                        info="必须是火山引擎方舟控制台里已开通的模型 ID"
+                        "(如 doubao-seed-…);填错会导致对话报模型不存在",
                     )
                     asr_api_key_input = gr.Textbox(
                         label="豆包 ASR API Key(语音输入🎤需要)",
                         type="password",
                         value=_asr.get("api_key", ""),
                         placeholder="留空 = 不修改",
+                        info=_key_hint(str(_asr.get("api_key", ""))),
                     )
                     edge_voice_input = gr.Textbox(
                         label="Edge TTS 声音",
@@ -1398,7 +1411,7 @@ def build_ui() -> gr.Blocks:
             try:
                 path = save_env(new_env)
                 _root_config.reload_config()
-                msg = f"✅ 已保存到 `{path}`(0600)。重启进程后生效。"
+                msg = f"✅ 已保存到 `{path}`(0600)。新配置下次对话起即时生效。"
                 if unknown:
                     msg += f"\n\n⚠️ env.json 包含未识别字段:{unknown}"
                 return msg
@@ -1547,7 +1560,7 @@ def _scene_feed_html(*, scene_available: bool) -> str:
 # 7861 /api/tts_state,(path, mtime) 变化即 fetch /api/tts_audio 解码播放。
 # `?v=` 版本号防 ES module 强缓存(同 _VIEWER_JS_VERSION 教训,改了记得 bump)。
 # ============================================================================
-_TTS_AUTOPLAY_JS_VERSION = "20260918a"
+_TTS_AUTOPLAY_JS_VERSION = "20260928a"
 
 # LAN 访问(2026-09-18):7861 资源基址在浏览器侧从 location 推导(同 WiFi
 # 下其他设备用 http://<PC局域网IP>:7860 打开时,写死 localhost 会连到设备

@@ -36,6 +36,8 @@ dependencies:
       # SDK
       - "reachy-mini>=1.10.0"
       - reachy-mini-dances-library
+      # 仿真 daemon 需要(SDK 的可选 extra,收进来免手动补装)
+      - "mujoco==3.3.0"
 
       # Web 框架
       - gradio>=4.0

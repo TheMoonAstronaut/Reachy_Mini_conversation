@@ -58,13 +58,31 @@ function initVolumeSlider(root) {
   if (slider) slider.value = String(volumePct);
   if (label) label.textContent = `${volumePct}%`;
   if (gainNode) gainNode.gain.value = volumePct / 100;
+  syncVolumeToBackend(volumePct); // 真机音量同步(后端 PCM 缩放)
   if (slider) {
     slider.addEventListener("input", (e) => {
       volumePct = parseInt(e.target.value, 10) || 0;
       localStorage.setItem(VOLUME_KEY, String(volumePct));
       if (label) label.textContent = `${volumePct}%`;
       if (gainNode) gainNode.gain.value = volumePct / 100;
+      syncVolumeToBackend(volumePct);
     });
+  }
+}
+
+/** 把音量比例同步到 7861 后端:推送到机器人的 PCM 按同一比例缩放
+ * (前端 GainNode 只管浏览器播放,真机走 state_bus → EdgeTTS.play)。
+ * fire-and-forget,失败静默(后端旧版本无此端点时浏览器音量仍可用)。 */
+function syncVolumeToBackend(pct) {
+  try {
+    const base =
+      window.__rmBase7861 ||
+      location.protocol + "//" + location.hostname + ":7861";
+    fetch(base + "/api/tts_volume?pct=" + pct, { method: "POST" }).catch(
+      () => {}
+    );
+  } catch (_e) {
+    /* 忽略 */
   }
 }
 

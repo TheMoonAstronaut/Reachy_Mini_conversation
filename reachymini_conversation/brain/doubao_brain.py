@@ -71,12 +71,23 @@ class DoubaoBrain:
     """
 
     def __init__(self, provider: str = "doubao", cfg: dict[str, Any] | None = None) -> None:
+        self.provider = provider
+        # 显式传入 cfg(测试/特殊用途)时不跟随 UI 热更新;否则每次查询前重读
+        self._cfg_override = cfg
+        self._reload()
+
+    def _reload(self) -> None:
+        """从 config_helper 重读 api_key/base_url/model。
+
+        UI「保存设置」会 reload_config() 刷新全局 config,这里下次查询时
+        自动拿到新值,无需重启进程。
+        """
         from reachymini_conversation.config_helper import get_brain_config
 
-        self.provider = provider
+        cfg = self._cfg_override
         if cfg is None:
             cfg = get_brain_config()
-        self.cfg = cfg[provider] if provider in cfg else cfg.get("doubao", cfg)
+        self.cfg = cfg[self.provider] if self.provider in cfg else cfg.get("doubao", cfg)
         self.api_key: str = self.cfg.get("api_key", "")
         self.base_url: str = self.cfg.get("base_url", "https://ark.cn-beijing.volces.com/api/v3")
         self.model: str = self.cfg.get("model", "doubao-seed-character-251128")
@@ -97,6 +108,8 @@ class DoubaoBrain:
         history: list[dict[str, Any]] | None = None,
     ) -> BrainResult:
         """异步 LLM 查询(支持真 function calling,P7)。"""
+        if self._cfg_override is None:
+            self._reload()  # UI 保存 API Key 后即时生效
         if not self.is_configured:
             return BrainResult(
                 reply=f"(mock)收到:{user_msg!r}\n(配置 API Key 后接真豆包)",

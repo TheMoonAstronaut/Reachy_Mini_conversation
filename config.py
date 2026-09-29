@@ -88,9 +88,13 @@ def _build_asr_config() -> dict[str, Any]:
 
 
 def _build_tts_config() -> dict[str, Any]:
-    """构建 TTS_CONFIG(向后兼容)。"""
+    """构建 TTS_CONFIG(可热重载)。"""
     return {
         "voice": _get("edge_tts", "voice", default=DEFAULT_ENV["edge_tts"]["voice"]),
+        # edge-tts 代理(可选):国内直连微软语音端点 TLS 频繁被重置,
+        # 有本地代理(Clash/v2ray 等)时配置 env.json:
+        #   "edge_tts": {"voice": "...", "proxy": "http://127.0.0.1:7890"}
+        "proxy": _get("edge_tts", "proxy", default=""),
     }
 
 
@@ -150,15 +154,17 @@ You have access to tools that control your physical body:
 # 自检
 # ============================================================================
 def _self_check() -> None:
-    """启动时自检:API Key 缺失就 WARNING。"""
+    """启动时自检:API Key 缺失就 WARNING(仅提醒,不影响启动)。"""
     if not BRAIN_CONFIG["doubao"]["api_key"]:
         logger.warning(
-            "BRAIN api_key 未配置。请编辑 %s 或用 UI 设置面板填写。",
+            "BRAIN api_key 未配置(不影响启动:纯仿真 UI 照常可用;对话功能需要 key。"
+            "请编辑 %s 或用 UI 设置面板填写,保存即生效)。",
             get_env_json_path(),
         )
     if not ASR_CONFIG["api_key"]:
         logger.warning(
-            "ASR api_key 未配置(豆包 WebSocket 流式,需要 .reachymini/env.json 填 doubao_asr.api_key)。"
+            "ASR api_key 未配置(仅影响语音输入;豆包 WebSocket 流式,在 .reachymini/env.json "
+            "填 doubao_asr.api_key 或 UI 设置面板)。"
         )
     if RUN_MODE not in {"pure_sim", "real_plus_sim", "pure_real"}:
         logger.warning(f"RUN_MODE='{RUN_MODE}' 不在白名单内,应为 pure_sim | real_plus_sim")

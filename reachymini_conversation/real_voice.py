@@ -306,8 +306,17 @@ def make_tts_audio_router(orchestrator_getter: Any):
                     _playing_started = True
                     _wire_wobbler(local_audio)
                 local_audio.push_audio_sample(pcm)
+                logger.info(
+                    f"[tts-router] TTS 已推送真机扬声器(wired, {getattr(pcm, 'shape', '?')})"
+                )
             elif target is not None:
                 target.media.push_audio_sample(pcm)
+                logger.info(f"[tts-router] TTS 已推送 {orch.run_mode} 媒体链")
+            else:
+                logger.warning(
+                    "[tts-router] 无可用播放目标(local_audio 不可用且 target 为 None),"
+                    "本句静默丢弃"
+                )
         except Exception as e:
             logger.warning(f"[tts-router] push_audio_sample({orch.run_mode}) 失败: {e}")
 

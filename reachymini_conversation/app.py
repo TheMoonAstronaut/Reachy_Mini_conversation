@@ -138,9 +138,11 @@ class ConversationApp(ReachyMiniApp):
         # V2 Fix D:真机眼睛相机(USB 直连,懒开)。提前创建 —— 手部跟随(P6)
         # 与 MJPEG /camera_feed(§3)共用同一实例,内部单抓帧线程写缓存,
         # 多消费者读缓存不抢帧(2026-09-17 P6 修复)。
-        from reachymini_conversation.local_camera import UsbEyeCamera
+        # 平台选型:Linux v4l2 / Windows mfvideosrc(2026-09-28 Windows
+        # 有线相机直连落地,此前 Windows 真机画面永远占位图)。
+        from reachymini_conversation.local_camera import UsbEyeCamera, WindowsEyeCamera
 
-        self._usb_eye = UsbEyeCamera()
+        self._usb_eye = UsbEyeCamera() if sys.platform == "linux" else WindowsEyeCamera()
 
         # 2.6 手部跟随(P6)— 默认关,UI/工具显式开
         logger.info("[P6] Initializing hand follower")
@@ -156,17 +158,16 @@ class ConversationApp(ReachyMiniApp):
                 否则退回 sim 眼睛相机(合成画面,纯仿真下永远检测不到手,
                 保持可用不崩)。真机相机未就绪返回 None,本轮跳过。
 
-                帧来源按平台二选一(2026-09 跨平台化):
+                帧来源按平台二选一(2026-09 跨平台化;2026-09-28 Windows
+                改为本机直连,不再走 daemon 媒体):
                 - Linux wired:UsbEyeCamera(v4l2 直连)
-                - Windows wired / on-robot:daemon 媒体(sim_mini 即真机本体
+                - Windows wired:WindowsEyeCamera(mfvideosrc 直连)
+                - on-robot:daemon 媒体(sim_mini 即真机本体
                   实例或其 localhost client,media.get_frame_jpeg 走 IPC)
                 """
                 if self._orchestrator is not None and self._orchestrator.real_mini is not None:
                     try:
-                        if sys.platform == "linux":
-                            frame = self._usb_eye.get_frame_jpeg()
-                        else:
-                            frame = reachy_mini.media.get_frame_jpeg()
+                        frame = self._usb_eye.get_frame_jpeg()
                         if frame:
                             return frame
                     except Exception as e:
@@ -295,12 +296,13 @@ class ConversationApp(ReachyMiniApp):
 
             scene_receiver = SceneUdpReceiver()
 
-            # V2 Fix D:真机眼睛相机源选择(2026-09 跨平台化):
+            # V2 Fix D:真机眼睛相机源选择(2026-09 跨平台化;2026-09-28
+            # Windows 落地本机直连):
             # - wired + Linux:UsbEyeCamera(v4l2 by-id 直连,延迟最低)
+            # - wired + Windows:WindowsEyeCamera(mfvideosrc 按设备名直连;
+            #   daemon B --no-media 无 daemon 媒体可用,直连是唯一通路)
             # - pure_real(on-robot):daemon 媒体(CSI 相机由本体 daemon 持有)
-            # - wired + Windows:v4l2 不存在 → 同 daemon 媒体路径
-            #   (daemon 经 gstreamer-bundle 可带媒体运行,win32 IPC 直出 JPEG)
-            if run_mode == "pure_real" or sys.platform != "linux":
+            if run_mode == "pure_real":
                 _real_frame_provider = _DaemonMediaFrameProvider(reachy_mini)
             else:
                 _real_frame_provider = self._usb_eye
@@ -353,7 +355,11 @@ class ConversationApp(ReachyMiniApp):
             raise
 
         logger.info("[P2] UI + Stream up. Waiting for stop_event.")
-        stop_event.wait()
+        try:
+            stop_event.wait()
+        except KeyboardInterrupt:
+            # Ctrl+C:不向上抛(否则下方清理被跳过),记日志后继续走清理流程
+            logger.info("[P2] Ctrl+C received, shutting down...")
 
         # ---------- 清理 ----------
         bus.update("status", "stopping")
@@ -551,16 +557,22 @@ def main() -> int:
         head_poll_hz=args.head_poll_hz,
         stream_port=args.stream_port,
     )
+    rc = 0
     try:
         app.wrapped_run()
-        return 0
     except KeyboardInterrupt:
         print("\n[reachy-mini-conversation] Ctrl+C, stopping...")
         app.stop()
-        return 130
+        rc = 130
     except Exception:
         logger.exception("App 异常退出")
-        return 1
+        rc = 1
+    # Windows 实测:Gradio/uvicorn/GStreamer 的非 daemon 线程会让解释器
+    # 在 main 返回后挂住(Ctrl+C "无法终止")。清理已在上层完成,强制退出,
+    # 残留资源随进程终止释放。
+    import os as _os
+
+    _os._exit(rc)
 
 
 if __name__ == "__main__":

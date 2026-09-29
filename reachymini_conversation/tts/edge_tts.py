@@ -25,10 +25,17 @@ class EdgeTTS:
     """
 
     def __init__(self, voice: str | None = None) -> None:
+        # 显式传入 voice(测试/特殊用途)时不跟随 UI 热更新
+        self._voice_override = voice
+        self._reload()
+
+    def _reload(self) -> None:
+        """从 config_helper 重读 voice/proxy(UI「保存设置」后即时生效,无需重启)。"""
         from reachymini_conversation.config_helper import get_tts_config
 
         cfg = get_tts_config()
-        self.voice = voice or cfg.get("voice", "zh-CN-XiaoxiaoNeural")
+        self.voice = self._voice_override or cfg.get("voice", "zh-CN-XiaoxiaoNeural")
+        self.proxy = cfg.get("proxy", "") or ""
 
     def synthesize(self, text: str, output_file: str | None = None) -> str | None:
         """同步合成:返回 wav 文件路径,失败返回 None。
@@ -39,6 +46,9 @@ class EdgeTTS:
         """
         if not text or not text.strip():
             return None
+
+        if self._voice_override is None:
+            self._reload()  # UI 保存音色后即时生效
 
         if output_file is None:
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -54,9 +64,15 @@ class EdgeTTS:
             "--write-media",
             output_file,
         ]
+        # 国内直连微软语音端点不稳(TCP 通但 TLS 被重置),有代理时走代理
+        if self.proxy:
+            cmd += ["--proxy", self.proxy]
 
         last_err = ""
-        for attempt in (1, 2):
+        # 3 次尝试 / 单次 20s(2026-09-28 用户日志:到 speech.platform.bing.com
+        # 的 connect 间歇性失败,原 2 次会整轮没声音;超时保持 20s —— 单次
+        # 30s 会让坏网络轮次的等待体感更糟)
+        for attempt in (1, 2, 3):
             try:
                 subprocess.run(
                     cmd,
@@ -84,6 +100,25 @@ class EdgeTTS:
         return None
 
     @staticmethod
+    def _find_ffmpeg() -> str | None:
+        """找 ffmpeg 可执行文件:PATH 优先,回退 imageio-ffmpeg 的静态二进制。
+
+        Windows 用户常没装 ffmpeg(需管理员/手动配 PATH),imageio-ffmpeg
+        随 pip 带来一个免安装静态版,保证响度归一化可用(否则真机音量偏小)。
+        """
+        import shutil
+
+        exe = shutil.which("ffmpeg")
+        if exe:
+            return exe
+        try:
+            import imageio_ffmpeg
+
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return None
+
+    @staticmethod
     def _normalize_loudness(path: str) -> None:
         """ffmpeg loudnorm 响度归一化(I=-10 LUFS / TP=-1.5dB);失败保留原文件。
 
@@ -100,14 +135,14 @@ class EdgeTTS:
         —— 内容格式与现状一致(下游 decodeAudioData / SDK play 均兼容)。
         """
         import os
-        import shutil
 
-        if shutil.which("ffmpeg") is None:
+        ffmpeg = EdgeTTS._find_ffmpeg()
+        if ffmpeg is None:
             logger.warning("[TTS] 无 ffmpeg,跳过响度归一化(音量可能偏小)")
             return
         tmp_out = path + ".norm.mp3"
         cmd = [
-            "ffmpeg", "-y", "-v", "error",
+            ffmpeg, "-y", "-v", "error",
             "-i", path,
             "-af", "loudnorm=I=-10:TP=-1.5:LRA=11",
             # loudnorm 会把采样率升到 48k/192k;edge-tts 原生 24kHz。
@@ -174,6 +209,18 @@ class EdgeTTS:
             # caps 的 interleaved 布局匹配,shape[0]=帧数让 PTS 归正。
             if data.ndim == 1:
                 data = np.stack([data, data], axis=1)
+            # UI 音量滑条(0-200%):前端 GainNode 只管浏览器播放,推送到
+            # 机器人前在这里按同一比例缩放 PCM(2026-09-28 Windows 有线
+            # 实测:USB 声卡直连无 daemon EQ 衰减,默认响度偏大,滑条必须
+            # 能控制真机音量)。
+            try:
+                from reachymini_conversation.state_bus import get_state_bus
+
+                vol = float(get_state_bus().get("tts_volume") or 1.0)
+            except Exception:
+                vol = 1.0
+            if vol != 1.0:
+                data = data * vol
             # 限幅(避免 clipping)
             data = np.clip(data, -1.0, 1.0).astype(np.float32)
             await asyncio.to_thread(push_audio_sample_fn, data)

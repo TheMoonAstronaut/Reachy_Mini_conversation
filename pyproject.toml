@@ -22,6 +22,9 @@ dependencies = [
     # ---- SDK ----
     "reachy_mini>=1.10.0",
     "reachy_mini_dances_library",
+    # 仿真 daemon 需要(SDK 把它放在可选 extra 里,但 sim 是默认形态,
+    # 收进主依赖避免"装完跑仿真报 No module named 'mujoco'")
+    "mujoco==3.3.0",
 
     # ---- 数值 / 音频基础 ----
     "numpy>=2.2.5",  # reachy_mini 1.10.0 要求 numpy>=2.2.5
@@ -39,6 +42,8 @@ dependencies = [
     "edge-tts",
     "httpx",
     "websockets",
+    # edge-tts 响度归一化用的静态 ffmpeg(免安装,PATH 无 ffmpeg 时自动回退)
+    "imageio-ffmpeg",
 
     # ---- 手部跟随(P6 启用)----
     "mediapipe",

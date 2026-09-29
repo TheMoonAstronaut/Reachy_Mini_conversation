@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # start.ps1 — Windows 启动脚本(原生适配,与 start.sh 等价)
 # =============================================================================
 # 用法(在 PowerShell 里,项目根目录):
@@ -27,7 +27,12 @@ param(
     [switch]$DaemonOnly
 )
 
-$ErrorActionPreference = 'Stop'
+# 必须用 Continue 而不是 Stop:conda / python 等原生程序的 stderr 在
+# PowerShell 5.1 里会变成 ErrorRecord,Stop 策略下任何一行日志都会
+# 中断当前语句 —— 实测 `conda activate` 的噪音和 UI 的一条 WARNING
+# 都能把脚本/管道当场杀掉(UI 被连带终止,Tee 日志 0 字节)。
+# 本脚本的错误处理靠显式检查 + exit,不依赖 EAP。
+$ErrorActionPreference = 'Continue'
 
 function Log($msg)  { Write-Host "[start] $msg" -ForegroundColor Green }
 function Warn($msg) { Write-Host "[warn] $msg" -ForegroundColor Yellow }
@@ -39,12 +44,30 @@ if ($Robot)   { $LaunchMode = "robot" }
 elseif ($Wired) { $LaunchMode = "wired" }
 
 # ---------- Python 环境 ----------
-# 优先 conda;否则用已激活的 venv/系统 python
+# 优先激活 conda 环境 reachy;没有该环境/没有 conda 时,回退到当前已激活
+# 的环境(只要 reachy_mini 可导入就用)。不再硬编码强依赖环境名。
+$envOk = $false
 if (Get-Command conda -ErrorAction SilentlyContinue) {
-    conda activate reachy
-    Log "已激活 conda 环境:reachy"
-} else {
-    Log "无 conda,使用当前 Python 环境"
+    conda activate reachy 2>$null
+    python -c "import reachy_mini" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $envOk = $true
+        Log "已激活 conda 环境:reachy"
+    }
+}
+if (-not $envOk) {
+    conda deactivate 2>$null
+    python -c "import reachy_mini" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $envOk = $true
+        Log "使用当前 Python 环境"
+    }
+}
+if (-not $envOk) {
+    Err "未找到可用的 Python 环境(需要已安装 reachy_mini)。"
+    Err "  conda 环境:conda create -n reachy python=3.12 -y;然后重装依赖"
+    Err "  其他环境:先激活再运行本脚本"
+    exit 1
 }
 Log "Python:$(python --version 2>&1)"
 Log "PWD:$PWD"
@@ -146,8 +169,25 @@ if ($lanIp) {
 }
 
 New-Item -ItemType Directory -Force "logs" | Out-Null
+
+# UI 端口预检:7860 已有实例在跑时直接引导使用,避免新实例 bind 失败秒退
+# (秒退的输出会被 PowerShell 管道吞掉,看起来像"启动报错后无响应")。
+$existingUi = Get-NetTCPConnection -LocalPort 7860 -State Listen -ErrorAction SilentlyContinue
+if ($existingUi) {
+    $owner = ($existingUi | Select-Object -First 1).OwningProcess
+    Warn "7860 端口已有实例在运行(PID $owner)。"
+    Warn "  直接打开浏览器使用: http://localhost:7860"
+    Warn "  或先停掉旧实例(任务管理器结束 PID $owner / 或其终端按 Ctrl+C)再启动"
+    exit 0
+}
+
 $logFile = "logs\start-${LaunchMode}-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 Log "UI 模式(python -m reachymini_conversation --ui),日志 tee 到 $logFile"
+Write-Host ""
+Write-Host "  ⏳ UI 首次启动约需 30-60 秒(连接 daemon + 初始化 GStreamer/Gradio)," -ForegroundColor Yellow
+Write-Host "     期间控制台可能只刷一两条提示,不是卡死,请勿 Ctrl+C。" -ForegroundColor Yellow
+Write-Host "     就绪后浏览器打开: http://localhost:7860" -ForegroundColor Yellow
+Write-Host ""
 python -m reachymini_conversation --ui 2>&1 | Tee-Object -FilePath $logFile
 
 # ---------- 收尾 ----------

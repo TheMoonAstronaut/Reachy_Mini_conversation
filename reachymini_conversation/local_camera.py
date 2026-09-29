@@ -60,6 +60,7 @@ class UsbEyeCamera:
     RETRY_INTERVAL_S = 3.0  # 未就绪时的重探测节流
     STALE_S = 5.0           # 运行中无帧判定掉线的阈值
     CAPTURE_HZ = 30.0       # 抓帧线程目标频率(相机实际帧率会进一步约束)
+    ENABLED_PLATFORMS = ("linux",)  # 子类(如 WindowsEyeCamera)覆盖此元组
 
     # 视频流协商偏好(2026-09-18 帧率/延迟优化,两轮迭代):
     # 相机默认自协商到 4K(每帧 ~1MB,MJPEG 推给浏览器 ~110Mbps,WiFi 下
@@ -98,14 +99,13 @@ class UsbEyeCamera:
     def start(self) -> None:
         """启动 GStreamer 管线(相机不在时保留重试意愿,走占位图)。
 
-        Windows 原生(2026-09 适配):v4l2/by-id 是 Linux 专属机制,本类在
-        非 Linux 平台直接保持未运行,消费者回落到 daemon 媒体相机
-        (见 app.py _DaemonMediaFrameProvider,与 on-robot 同款路径)。
+        平台支持由 ENABLED_PLATFORMS 决定:本类(v4l2)仅 Linux;
+        Windows 用子类 WindowsEyeCamera(mfvideosrc 直连)。
         """
         import sys
 
-        if sys.platform != "linux":
-            logger.info(f"[usb-eye] 非 Linux 平台({sys.platform}),UsbEyeCamera 禁用")
+        if sys.platform not in self.ENABLED_PLATFORMS:
+            logger.info(f"[usb-eye] 当前平台({sys.platform})未启用本相机实现,保持未运行")
             return
         with self._lock:
             self._want_running = True
@@ -256,3 +256,78 @@ class UsbEyeCamera:
                 pass
         self._pipe = None
         self._appsink = None
+
+
+class WindowsEyeCamera(UsbEyeCamera):
+    """Windows 有线真机眼睛相机直连(mfvideosrc + appsink)。
+
+    为什么不用 daemon 媒体:有线模式 daemon B 以 --no-media 运行
+    (避开与 sim daemon 的媒体端口冲突),daemon 媒体路径在 Windows 有线
+    下永远拿不到真机画面(旧行为 = /camera_feed 永久占位图)。改为 app
+    进程直连 USB UVC 相机:GStreamer mfvideosrc 按设备名
+    "Reachy Mini Camera" 匹配,MJPEG 直出,单抓帧线程写缓存
+    (与 UsbEyeCamera 同款结构,多消费者不抢帧)。
+
+    复用父类全部生命周期/自愈逻辑,仅覆盖平台与管线构造:
+      - ENABLED_PLATFORMS = ("win32",)
+      - _PIPELINE_CANDIDATES:mfvideosrc caps(首选 720p30,回退纯 MJPEG)
+      - _open_pipeline:mfvideosrc device-name 代替 v4l2src device
+
+    实测(Windows 11 + Reachy Mini Lite):720p 候选一次协商成功,
+    ~1s 内出首帧。
+    """
+
+    ENABLED_PLATFORMS = ("win32",)
+
+    # (mfvideosrc caps, 附加元素, appsink 前 caps)
+    # 实测(Windows 11 + Reachy Mini Lite):mfvideosrc 带任何分辨率 capsfilter
+    # 都会协商静默卡死(无帧不报错),只能直出默认格式(~1.2MB/帧,带宽爆炸)。
+    # 首选方案:直出 MJPEG → 管线内 jpegdec→videoscale→jpegenc 缩到 720p
+    # (~135KB/帧,与 Linux v4l2 候选同一思路);解码链不可用时回退纯 MJPEG 直出。
+    _PIPELINE_CANDIDATES = (
+        (
+            "image/jpeg",
+            "jpegdec ! videoscale ! jpegenc",
+            "image/jpeg,width=1280,height=720",
+        ),
+        ("image/jpeg", "", ""),
+    )
+
+    def __init__(self, device_name: str = "Reachy Mini Camera") -> None:
+        # 复用父类 device 字段:此处存 mfvideosrc 的 device-name
+        super().__init__(device=device_name)
+
+    def _open_pipeline(self, device: str) -> None:
+        import gi
+
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+
+        Gst.init(None)
+        self._GST = Gst
+        # MJPEG 直出,appsink 拿到的都是 JPEG bytes;按候选顺序协商
+        # (首选 720p30),parse_launch/PLAYING 失败自动回退下一候选。
+        last_err: Exception | None = None
+        for src_caps, middle, sink_caps in self._PIPELINE_CANDIDATES:
+            parts = [f'mfvideosrc device-name="{device}" ! {src_caps}']
+            if middle:
+                parts.append(f"! {middle}")
+            if sink_caps:
+                parts.append(f"! {sink_caps}")
+            parts.append("! appsink name=eye-sink drop=true max-buffers=2 sync=false")
+            desc = " ".join(parts)
+            try:
+                self._pipe = Gst.parse_launch(desc)
+                self._appsink = self._pipe.get_by_name("eye-sink")
+                ret = self._pipe.set_state(Gst.State.PLAYING)
+                if ret == Gst.StateChangeReturn.FAILURE:
+                    raise RuntimeError(f"pipeline 启动失败({src_caps})")
+                logger.info(
+                    f"[usb-eye] 管线已开 {device}(方案: {src_caps} | {middle or '直出'})"
+                )
+                return
+            except Exception as e:
+                last_err = e
+                logger.warning(f"[usb-eye] 方案({src_caps})协商失败: {e}")
+                self._close_pipeline()
+        raise RuntimeError(f"所有管线候选均失败: {last_err}")

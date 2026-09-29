@@ -282,6 +282,18 @@ def create_camera_stream_app(
         """TTS 自动播放状态轮询(JSON)。字段语义见 _tts_state_payload。"""
         return _tts_state_payload()
 
+    @app.post("/api/tts_volume")
+    async def set_tts_volume(pct: float = 100.0) -> dict[str, object]:
+        """UI 音量滑条同步:前端 GainNode 实时调浏览器播放音量,这里把同一
+        比例写进 state_bus("tts_volume", 0-2.0),EdgeTTS.play 推送到
+        机器人前按此缩放 PCM —— 真机音量与滑条联动(2026-09-28:
+        Windows 有线 USB 声卡直连,此前滑条只管浏览器,真机音量无法调)。"""
+        from reachymini_conversation.state_bus import get_state_bus
+
+        frac = min(2.0, max(0.0, float(pct) / 100.0))
+        get_state_bus().update("tts_volume", frac)
+        return {"ok": True, "volume": frac}
+
     @app.get("/api/tts_audio")
     async def tts_audio() -> Response:
         """返回最新 TTS wav 字节(FileResponse,带 Range/etag 支持)。

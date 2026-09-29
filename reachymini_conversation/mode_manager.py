@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -70,13 +71,10 @@ class RealDaemonRunner:
         self.log_path = log_path
         self._proc: subprocess.Popen | None = None
         self._adopted = False  # 收养的别人的 daemon,stop() 时不杀
+        self.last_error: str | None = None  # daemon 自报的 error(如 "No motors detected")
 
-    def _probe_ready(self) -> bool:
-        """端口有 daemon 且 backend 真正就绪(state=='running')。
-
-        教训(2025-09-15):只看 HTTP 200 不够 —— 电机没上电时 daemon 的
-        uvicorn 也会 200,但 backend 初始化失败,WS 连接被 403 拒。
-        """
+    def _probe_state(self) -> tuple[str | None, str | None]:
+        """探测端口上的 daemon,返回 (state, error);无响应返回 (None, None)。"""
         import json
         import urllib.request
 
@@ -84,11 +82,20 @@ class RealDaemonRunner:
         try:
             with urllib.request.urlopen(url, timeout=2) as resp:
                 if resp.status != 200:
-                    return False
+                    return None, None
                 payload = json.loads(resp.read())
-                return payload.get("state") == "running"
+                return payload.get("state"), payload.get("error")
         except Exception:
-            return False
+            return None, None
+
+    def _probe_ready(self) -> bool:
+        """端口有 daemon 且 backend 真正就绪(state=='running')。
+
+        教训(2025-09-15):只看 HTTP 200 不够 —— 电机没上电时 daemon 的
+        uvicorn 也会 200,但 backend 初始化失败,WS 连接被 403 拒。
+        """
+        state, _ = self._probe_state()
+        return state == "running"
 
     def _find_occupant_pid(self) -> int | None:
         """本端口上处于 LISTEN 的进程 PID;无占用或枚举失败 → None。"""
@@ -106,19 +113,63 @@ class RealDaemonRunner:
             logger.warning(f"[real-daemon] 枚举端口 {self.port} 占用失败: {e}")
         return None
 
+    def _wait_backend_stopped(self, timeout_s: float = 10.0) -> bool:
+        """轮询 /api/daemon/status 直到 state=='stopped'(goto_sleep 完成)。"""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            state, _ = self._probe_state()
+            if state == "stopped":
+                return True
+            time.sleep(0.5)
+        return False
+
+    def _request_graceful_shutdown(self) -> bool:
+        """HTTP 请求 daemon 优雅停机(POST /api/daemon/stop)。
+
+        SDK daemon 收到后走完整 shutdown 流程(goto_sleep_on_stop 默认
+        True → "Putting Reachy Mini to sleep" → 电机回缩休眠)再退出。
+        这是 Windows 上唯一可靠的优雅通道:
+          - CTRL_BREAK 只会发给**与调用方共享控制台**的进程,daemon 以
+            CREATE_NO_WINDOW 起在隐藏控制台里,实测收不到;
+          - TerminateProcess 强杀则 shutdown hook 来不及跑,电机定格
+            (2026-09-28 用户报"断开真机不缩回不休眠"的根因)。
+        """
+        import urllib.request
+
+        # goto_sleep 是 SDK 该端点的必填 query 参数(缺省 422):
+        # true → daemon shutdown 流程里执行 reset_to_sleep,电机回缩休眠。
+        url = f"http://127.0.0.1:{self.port}/api/daemon/stop?goto_sleep=true"
+        try:
+            req = urllib.request.Request(url, method="POST")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    logger.info("[real-daemon] 已请求 daemon 停机(电机将回缩休眠)")
+                    return True
+        except Exception as e:
+            logger.debug(f"[real-daemon] HTTP 停机请求失败: {e}")
+        return False
+
     def _reap_pid(self, pid: int, timeout_s: float = 8.0) -> None:
-        """TERM → 等退出 → 超时 KILL;最后确认端口 LISTEN 已释放。"""
+        """回收占用端口的进程:先 HTTP 优雅停机(电机休眠)→ 等自然退出
+        → terminate → KILL;最后确认端口 LISTEN 已释放。"""
         import psutil
 
         try:
             proc = psutil.Process(pid)
         except psutil.NoSuchProcess:
             return
+        graceful = self._request_graceful_shutdown()
         try:
-            proc.terminate()
-            proc.wait(timeout=timeout_s)
+            if graceful:
+                # 等电机休眠完成(state=stopped)再 terminate 空壳 uvicorn
+                self._wait_backend_stopped(timeout_s=10)
+                proc.terminate()
+                proc.wait(timeout=3)
+            else:
+                proc.terminate()  # Windows 上 = TerminateProcess 强杀
+                proc.wait(timeout=timeout_s)
         except psutil.TimeoutExpired:
-            logger.warning(f"[real-daemon] PID {pid} TERM 超时,升级 KILL")
+            logger.warning(f"[real-daemon] PID {pid} 停机超时,升级 KILL")
             try:
                 proc.kill()
                 proc.wait(timeout=3)
@@ -143,6 +194,7 @@ class RealDaemonRunner:
         端口被占但不健康(state != running)时必须先清理僵尸再起新 daemon,
         否则新 daemon bind 失败的 shutdown 钩子会 sleep 真机电机(见类 docstring)。
         """
+        self.last_error = None
         if self._proc is not None and self._proc.poll() is None:
             logger.info(f"[real-daemon] 已在运行(PID {self._proc.pid})")
             return
@@ -157,8 +209,18 @@ class RealDaemonRunner:
                 "(state != running)—— 清理僵尸 daemon 后重启"
             )
             self._reap_pid(occupant)
+        # 包一层 import reachymini_conversation 再 runpy 启动:
+        # 该包的 __init__ 会在 Windows 上抢先加载 conda 兼容 libexpat,
+        # 绕开 gstreamer-bundle 自带副本与 pyexpat 的 DLL 冲突。
+        # (daemon B 是独立子进程,直接 -m 进 reachy_mini 不会执行本包的
+        # 预加载,SDK daemon 的 prompt_toolkit → minidom → pyexpat 链必炸,
+        # 2026-09-29 全新环境实测。)
         cmd = [
-            sys.executable, "-m", "reachy_mini.daemon.app.main",
+            sys.executable, "-c",
+            "import reachymini_conversation;"  # Windows libexpat 预加载(fixup)
+            "import runpy, sys;"
+            "sys.argv = ['reachy-mini-daemon'] + sys.argv[1:];"
+            "runpy.run_module('reachy_mini.daemon.app.main', run_name='__main__')",
             "--fastapi-port", str(self.port),
             "--no-media",  # 避开与 sim daemon 的 UDP 5005/5006 冲突;音频走声卡独立通道
             "--log-level", "INFO",
@@ -184,6 +246,10 @@ class RealDaemonRunner:
 
         注意:必须等 backend 就绪(motors 检测到 + wake_up 完成),
         否则 client WS 会被 403 拒("No motors detected" 时尤其如此)。
+
+        fail-fast(Windows 实测改进):daemon 自报 state=='error'(如电机
+        没上电的 "No motors detected")时不傻等 90s 超时,立即失败并把
+        daemon 的 error 文本带出(last_error),UI 直接显示根因。
         """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -193,29 +259,56 @@ class RealDaemonRunner:
                     f"日志 {self.log_path}(常见原因:真机电源没开 / USB 串口被占)"
                 )
                 return False
-            if self._probe_ready():
+            state, err = self._probe_state()
+            if state == "running":
                 logger.info("[real-daemon] 就绪(state=running)")
                 return True
+            if state == "error":
+                self.last_error = err
+                logger.error(f"[real-daemon] daemon 进入 error 状态,fail-fast 退出: {err}")
+                return False
             time.sleep(1.0)
         logger.error(f"[real-daemon] 就绪超时({timeout_s}s)")
         return False
 
     def stop(self) -> None:
-        """停 daemon B(先 TERM 后 KILL);收养的 daemon 不杀(不属于我们)。"""
+        """停 daemon B(先 TERM 后 KILL)。
+
+        收养的外部 daemon 也要停:UI「断开真机」的语义 = 释放真机
+        (daemon 的 shutdown hook 会让电机休眠)。2026-09-28 实测:收养
+        不杀导致点断开后机器人不休眠、后台进程残留,用户以为断开失灵。
+        """
         if self._adopted:
-            logger.info("[real-daemon] 收养的 daemon,不杀,保持运行")
             self._adopted = False
+            occupant = self._find_occupant_pid()
+            if occupant is not None:
+                logger.info(f"[real-daemon] 停止收养的外部 daemon (PID {occupant})")
+                self._reap_pid(occupant)
             return
         if self._proc is None:
             return
         if self._proc.poll() is None:
-            logger.info(f"[real-daemon] 停止 PID {self._proc.pid}")
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                logger.warning("[real-daemon] TERM 无效,KILL")
-                self._proc.kill()
+            logger.info(
+                f"[real-daemon] 停止 PID {self._proc.pid}"
+                "(先 HTTP /api/daemon/stop 让电机回缩休眠)"
+            )
+            if self._request_graceful_shutdown():
+                # /api/daemon/stop 只停机器人后端(电机休眠序列),uvicorn
+                # 进程仍存活;等 state=stopped 后 terminate —— 此时电机
+                # 已休眠,强杀安全。
+                self._wait_backend_stopped(timeout_s=10)
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+            else:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    logger.warning("[real-daemon] TERM 超时,KILL")
+                    self._proc.kill()
         self._proc = None
 
 
@@ -297,8 +390,11 @@ class ModeManager:
                 )
                 daemon.start()
                 if not daemon.wait_ready():
+                    detail = getattr(daemon, "last_error", None)
                     raise RuntimeError(
-                        "真机 daemon 未就绪。排查:① 真机电机电源是否接通并打开 "
+                        "真机 daemon 未就绪"
+                        + (f": {detail}" if detail else "")
+                        + "。排查:① 真机电机电源是否接通并打开 "
                         "② USB 线是否插牢 ③ daemon 日志(reachymini_conversation 的 logs/ 或系统临时目录)末尾有无 "
                         "'No motors detected'"
                     )
