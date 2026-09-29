@@ -54,6 +54,10 @@ class SoundLocalizer:
         # 懒加载 AudioDoA(避免 import 时无硬件就崩)
         self._doa: Any | None = None
         self._available: bool = False
+        # 启动时是否曾探活成功。USB 真机(ReSpeaker)会热插拔重枚举,
+        # 仅当"曾经可用过"才值得周期性重探自愈;从未有过硬件的机器
+        # 不必每 30s 白探一次。
+        self._ever_available: bool = False
         # V2 修复:声源跟随默认**关**(用户反馈:真机接入后 ReSpeaker 活了,
         # 环境音莫名触发转头)。读 DoA 更新徽章照常,只是不驱动身体;
         # UI「🧭 声源跟随」开关显式开启(写 bus.doa_follow_enabled)。
@@ -104,9 +108,25 @@ class SoundLocalizer:
 
             self._doa = AudioDoA()
             self._available = self._doa.available
+            # 探活拿到句柄即视为"曾可用":后续实测读失败/USB 断开时
+            # 循环里还会周期性重探自愈(真机热插拔场景)。
+            self._ever_available = self._available
         except Exception as e:
             logger.warning(f"[SoundLocalizer] AudioDoA 初始化失败: {e}")
             self._available = False
+
+        # 探活可能误报(2026-09-29 Ubuntu 实测:无 ReSpeaker 机器上
+        # init_respeaker_usb 通过,但首次读即 Errno 19)——启动时真读一次,
+        # 失败立即降级,避免进循环后 1s 的错误刷屏。
+        if self._available and self._doa is not None:
+            try:
+                self._doa.get_DoA()
+                self._ever_available = True
+            except Exception as e:
+                logger.warning(
+                    f"[SoundLocalizer] DoA 首次实测读取失败,判定硬件不可用: {e}"
+                )
+                self._available = False
 
         self._bus.update("doa_available", self._available)
         logger.info(
@@ -138,20 +158,82 @@ class SoundLocalizer:
         """最近一次 DoA 角度(度)。None 表示还没有读。"""
         return self._last_angle_deg
 
+    # 连续 tick 失败多少次后判定硬件已断开并降级静默。
+    # 10Hz 轮询下 = 1s 实测确认,足够排除偶发抖动。
+    _DEGRADE_AFTER_CONSECUTIVE_ERRORS = 10
+
+    # 降级后每隔多少个 tick 重探一次硬件(10Hz 下 300 = 30s),
+    # 实现 USB 断开重连的自愈。
+    _REPROBE_INTERVAL_TICKS = 300
+
     # ---------- 后台主循环 ----------
     def _loop(self) -> None:
         interval = 1.0 / self.doa_hz
         logger.info(f"[sound-localizer] loop started, interval={interval:.3f}s")
 
+        consecutive_errors = 0
+        ticks_since_reprobe = 0
         while not self._stop.is_set():
+            # 自愈:曾经可用但现在不可用 → 周期性重探(USB 真机重枚举后
+            # 句柄失效,重探成功即恢复,无需重启应用)
+            if not self._available and self._ever_available:
+                ticks_since_reprobe += 1
+                if ticks_since_reprobe >= self._REPROBE_INTERVAL_TICKS:
+                    ticks_since_reprobe = 0
+                    if self._try_reinit():
+                        consecutive_errors = 0
+
             try:
                 self._tick()
+                consecutive_errors = 0
             except Exception as e:
-                logger.warning(f"[sound-localizer] tick error: {e}")
-                # 不死,继续轮询
+                consecutive_errors += 1
+                # 前几次照常告警(便于发现偶发问题);降级后只偶发提醒
+                if consecutive_errors <= 3 or consecutive_errors % 100 == 0:
+                    logger.warning(f"[sound-localizer] tick error: {e}")
+                if (
+                    consecutive_errors >= self._DEGRADE_AFTER_CONSECUTIVE_ERRORS
+                    and self._available
+                ):
+                    # 连续失败 → 判定 DoA 硬件已不可用(2026-09-29 Ubuntu 实测:
+                    # 机器人 USB 设备频繁 reset/重枚举,旧 hidraw 句柄读一次
+                    # 即 Errno 19,10Hz 刷爆日志)。降级为静默空转,UI 显 N/A;
+                    # 循环会每 30s 重探自愈。
+                    self._available = False
+                    self._bus.update("doa_available", False)
+                    logger.warning(
+                        f"[sound-localizer] 连续 {consecutive_errors} 次读取失败,"
+                        "判定 DoA 硬件已断开,降级静默(每 30s 自动重探)"
+                    )
             if self._stop.wait(interval):
                 break
         logger.info("[sound-localizer] loop exited")
+
+    def _try_reinit(self) -> bool:
+        """重新探测并打开 AudioDoA(自愈路径)。成功返回 True 并换句柄。
+
+        失败静默返回 False(设备可能还没插回);不覆盖现有状态。
+        """
+        try:
+            from reachy_mini.media.audio_doa import AudioDoA
+
+            doa = AudioDoA()
+            if not doa.available:
+                return False
+            doa.get_DoA()  # 实测一次,防探活误报
+        except Exception:
+            return False
+        old = self._doa
+        self._doa = doa
+        self._available = True
+        self._bus.update("doa_available", True)
+        logger.info("[sound-localizer] DoA 硬件重连成功,恢复声源定位")
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                pass
+        return True
 
     def _tick(self) -> None:
         """一次轮询。"""

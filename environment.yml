@@ -27,7 +27,8 @@ dependencies:
   # 决策 6/13 变更(2025-09-09):numpy>=2.2.5(reachy_mini 要求)
   - numpy>=2.2.5
   - scipy
-  - soundfile
+  # conda-forge 上包名是 pysoundfile(PyPI 上叫 soundfile)
+  - pysoundfile
   - python-dotenv
 
   # ---------- 走 pip(mediapipe / av conda 版本滞后)----------

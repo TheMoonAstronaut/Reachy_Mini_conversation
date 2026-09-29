@@ -24,6 +24,23 @@ import threading
 from pathlib import Path
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# matplotlib 预导入(Linux 实测 2026-09-29,崩于 Ubuntu 22.04 + 全新 conda 环境)
+#   mediapipe 的 mp.tasks.vision 包初始化会传递 import matplotlib
+#   (drawing_utils → pyplot)。在本进程已加载 GStreamer/PyGObject/pulse
+#   等重 C 库之后首次 import matplotlib,会在 C 层崩(SIGSEGV / pybind11
+#   abort,崩溃点落在纯 Python 的 _mathtext_data.py,属堆损坏特征)。
+#   在主线程、重库初始化之前先完成 matplotlib 导入可稳定规避。
+#   matplotlib 是 mediapipe 的传递依赖(不在本项目依赖里),失败无害。
+# ---------------------------------------------------------------------------
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")  # 无头服务端,避免再拉 GUI 后端
+    import matplotlib.pyplot  # noqa: F401
+except Exception:  # pragma: no cover - matplotlib 缺失时由 mediapipe 探活兜底
+    pass
+
 # SDK 基类
 from reachy_mini.apps.app import ReachyMiniApp
 from reachy_mini.reachy_mini import ReachyMini

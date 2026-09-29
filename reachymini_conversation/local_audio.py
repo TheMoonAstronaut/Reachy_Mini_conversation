@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 _LOCAL_AUDIO: Any | None = None
 _LOCAL_AUDIO_FAILED = False
 
+# 注意:曾考虑过"会话中周期性把硬件音量拉回 100%"的守护线程,已否决——
+# 用户需要自行调整音量(硬件音量键/UI),守护会覆盖手动调整。
+# 音量控制的正确姿势:
+#   ① start.sh 启动时把声卡恢复 100% 一次(防上次异常掉电残留低音量)
+#   ② 之后音量交给用户:桌面音量键 / UI 音量滑条(0-200%,推送前 PCM
+#     软件缩放,edge_tts.py,与硬件音量无关)
+# 若再遇到"幻影按键砍音量"(2026-09-16/29 各一次实测),手动调回即可。
+
 
 def get_local_audio() -> Any | None:
     """懒创建 GStreamerAudio 单例;初始化失败(无声卡)返回 None 且记住不再重试。"""

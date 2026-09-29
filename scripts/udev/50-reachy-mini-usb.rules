@@ -1,0 +1,24 @@
+# Reachy Mini robot USB devices — disable USB autosuspend.
+#
+# Why (2026-09-29 Ubuntu 22.04 实测):
+#   The camera (38fb:1002) ships with power/control=auto and drops off the
+#   USB bus under autosuspend; kernel log showed repeated
+#   "reset high-speed USB device ... device firmware changed / USB disconnect"
+#   events (26 disconnects in one day). Every disconnect invalidates the
+#   hidraw handle the SDK's AudioDoA holds, after which every read fails with
+#   "[Errno 19] No such device" — spamming the app log at 10 Hz and killing
+#   sound-source localization until the app is restarted.
+#
+# Fix: force power/control=on for all three robot USB identities
+#   (audio card, camera, CH343 serial).
+#
+# Install:
+#   sudo cp scripts/udev/50-reachy-mini-usb.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+# Verify:
+#   cat /sys/bus/usb/devices/*/power/control   # expect all "on"
+#   journalctl -k -f | grep -i usb             # disconnects should stop
+
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="38fb", ATTR{idProduct}=="1001", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="38fb", ATTR{idProduct}=="1002", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="55d3", ATTR{power/control}="on"
