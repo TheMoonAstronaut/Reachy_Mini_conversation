@@ -147,17 +147,20 @@ pytest tests/smoke_test.py -v   # 部分用例依赖 GStreamer,可能跳过/失�
 会在安装时自动把 GStreamer(含 PyGObject 绑定)带到 Windows,**无需手动装
 GTK/GStreamer**。
 
-#### 步骤 1:一键装环境
+#### 步骤 1:装环境
 
 ```powershell
-# 项目根目录,PowerShell(首次运行脚本若被拦,先执行:
-#   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned)
+# 项目根目录,PowerShell
+# 推荐按根 README 的 Windows 章节手动执行(conda 建环境 + python -m pip
+# install -e ".[dev]"),步骤清晰且已实测。历史一键脚本也可用:
+#   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # 首次被拦时执行
 .\scripts\install_deps.ps1
 ```
 
 脚本做的事:检查/用 winget 安装 Git 与 Python 3.12 → 创建 venv(有 conda
 则用 conda)→ `pip install -e ".[dev]"` → 验证 CLI 注册。
 > 国内网络慢/断:把脚本里 `$PipIndex` 换成 `https://mirrors.aliyun.com/pypi/simple/`
+> 依赖里的 mujoco / imageio-ffmpeg 已随项目自动安装,无需额外步骤。
 
 #### 步骤 2:配置 API Key
 
@@ -191,7 +194,9 @@ curl.exe -L -o ~\.cacheeachymini\hand_landmarker.task `
 #### 已知边界
 
 - 相机/音频走 SDK 的 Windows 媒体路径(win32 IPC),daemon 可带媒体运行
-- `local_camera.py`(v4l2)仅 Linux 生效,Windows 上相机自动改走 daemon 媒体
+- `local_camera.py`(v4l2)仅 Linux 生效;Windows 有线版真机画面由
+  `WindowsEyeCamera`(mfvideosrc 直连 USB 相机,管线内缩 720p)提供,
+  不再依赖 daemon 媒体(daemon B 以 --no-media 运行,无媒体可用)
 - 若遇问题先查 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md);首次 pip 安装会
   触发 gstreamer-bundle 后安装下载(数十 MB),失败时换镜像重跑即可
 
@@ -285,7 +290,7 @@ curl.exe -L -o ~\.cacheeachymini\hand_landmarker.task `
 
 Then open http://localhost:7860 (or http://<LAN-IP>:7860 from other devices).
 
-**Known boundaries:** camera/audio use the SDK's Windows media path (win32 IPC, daemon runs with media); `local_camera.py` (v4l2) is Linux-only and Windows automatically falls back to daemon media; the first `pip install` triggers a gstreamer-bundle post-install download (tens of MB) — re-run pip with a mirror if it fails.
+**Known boundaries:** camera/audio use the SDK's Windows media path (win32 IPC, daemon runs with media); `local_camera.py` (v4l2) is Linux-only, while Windows wired uses `WindowsEyeCamera` (mfvideosrc direct USB camera capture, downscaled to 720p in-pipeline) since daemon B runs with `--no-media`; the first `pip install` triggers a gstreamer-bundle post-install download (tens of MB) — re-run pip with a mirror if it fails.
 
 ### Uninstall
 

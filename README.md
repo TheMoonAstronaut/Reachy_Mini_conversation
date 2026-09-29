@@ -71,9 +71,66 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 切换调试模式:Ctrl+C 停掉换命令重启(sim daemon 健康实例自动复用)。
 
 **Windows 用户**:支持原生 Windows(官方 SDK 经 `gstreamer-bundle` 自动
-带 GStreamer,无需手动装 GTK):先跑 `.\scripts\install_deps.ps1` 装环境,
-再 `.\scripts\start.ps1`(仿真)或 `.\scripts\start.ps1 -Wired`(有线真机)。
-细节见 [`docs/INSTALL.md`](docs/INSTALL.md) Windows 章节。
+带 GStreamer,无需手动装 GTK)。以下步骤已在 Windows 11 + conda 实测通过
+(仿真 daemon + Web UI + 视频流全链路 OK,全套测试 267 通过 / 13 跳过):
+
+```powershell
+# ---------- 1. 创建 Python 3.12 环境(名字随意) ----------
+# 若报 NoChannelsConfiguredError(.condarc 里 channels 为空),先配一次镜像:
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
+conda create -n reachy-conversation-test python=3.12 -y
+conda activate reachy-conversation-test
+
+# ---------- 2. 安装依赖 ----------
+# 注意:一律用 python -m pip。SDK(reachy_mini>=1.10)声明 pip>=26.1,
+# 不带 -m 的裸 pip 在自升级时会被拒绝("To modify pip..." 报错)。
+# mujoco(仿真 daemon 需要)已包含在项目依赖里,无需单独装。
+# 首次 pip 会触发 gstreamer-bundle 后安装下载(数十 MB,国内耐心等或换镜像)。
+python -m pip install -e ".[dev]"
+
+# ---------- 3. (仅当报 DLL 错时)修复 GStreamer bundle 的 libexpat 冲突 ----------
+# 正常情况下无需操作:包导入时(含 daemon B 子进程)会自动预加载 conda 的
+# 兼容 libexpat。若绕开本包直接 import reachy_mini 后遇到 "DLL load
+# failed while importing pyexpat",再执行下面的手动替换(先备份):
+$envs = python -c "import sys; print(sys.prefix)"   # 当前环境路径
+Copy-Item "$envs\Lib\site-packages\gstreamer_libs\bin\libexpat.dll" `
+          "$envs\Lib\site-packages\gstreamer_libs\bin\libexpat.dll.bak"
+Copy-Item "$envs\Library\bin\libexpat.dll" `
+          "$envs\Lib\site-packages\gstreamer_libs\bin\libexpat.dll" -Force
+
+# ---------- 4. 配置 API Key(可选,纯仿真看 UI 可跳过) ----------
+mkdir ~\.reachymini
+notepad ~\.reachymini\env.json   # 内容见下文「配置 API Key」节
+# 国内网络注意:edge-tts 直连微软语音端点 TLS 频繁被重置(现象=合成频繁
+# 超时重试)。有本地代理(Clash/v2ray 等)时在 env.json 加一行即可走代理:
+#   "edge_tts": { "voice": "zh-CN-XiaoxiaoNeural", "proxy": "http://127.0.0.1:7890" }
+
+# ---------- 5. (可选)手部跟随模型(~8MB,不装则「手部跟随」不可用) ----------
+# 官方源 storage.googleapis.com 国内不通,用 GitHub 镜像(gh-proxy):
+mkdir ~\.cache\reachymini
+curl.exe -L -o ~\.cache\reachymini\hand_landmarker.task `
+  "https://gh-proxy.com/https://raw.githubusercontent.com/google-ai-edge/mediapipe-samples/main/examples/hand_landmarker/ios/HandLandmarker/hand_landmarker.task"
+# 若 gh-proxy.com 也不通,依次尝试替换域名:ghfast.top / mirror.ghproxy.com
+
+# ---------- 6. 启动 ----------
+.\scripts\start.ps1            # 纯仿真
+.\scripts\start.ps1 -Wired     # 有线真机(机器人 USB 插本机,启动即自动连)
+# 环境解析:优先 conda 环境 reachy;没有则用当前已激活的环境(检查
+# reachy_mini 可导入)。手动起两个终端的等价命令:
+#   终端1: $env:REACHYMINI_RUN_MODE="pure_sim"; python -m reachymini_conversation.daemon_launcher --sim --headless
+#   终端2: python -m reachymini_conversation --ui
+
+# ---------- 7. 验证安装 ----------
+python -m pytest tests/   # 期望:全通过,skip 为 v4l2(Linux-only)/无硬件相关
+```
+
+细节见 [`docs/INSTALL.md`](docs/INSTALL.md) Windows 章节;
+排障先查 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) 的 Windows 节
+(串口"函数不正确/拒绝访问"、TTS 超时、libexpat DLL、断开不休眠等都在里面有)。
+
+> 🪟 **Windows 专用提示**:`scripts/install_deps.sh` / `install_deps.ps1`
+> 是历史遗留脚本,**不需要运行**——Windows 的 GStreamer/PyGObject 由
+> pip 的 gstreamer-bundle 自动处理,按上面 1-6 步即可。
 
 **局域网访问**:UI 监听 `0.0.0.0`,同一 WiFi 下的手机/平板/其他电脑直接用
 `http://<本机局域网IP>:7860` 打开即可(启动时控制台会打印,如
@@ -220,7 +277,57 @@ curl -L -o ~/.cache/reachymini/hand_landmarker.task \
 
 Then open [http://localhost:7860](http://localhost:7860).
 
-**Windows users**: native Windows is supported (the official SDK bundles GStreamer via `gstreamer-bundle` — no manual GTK needed). Run `.\scripts\install_deps.ps1` to set up the environment, then `.\scripts\start.ps1` (sim) or `.\scripts\start.ps1 -Wired` (wired robot). Details in the Windows section of [`docs/INSTALL.md`](docs/INSTALL.md).
+**Windows users**: native Windows is supported (the official SDK bundles GStreamer via `gstreamer-bundle` — no manual GTK needed). Verified end-to-end on Windows 11 + conda (sim daemon + Web UI + video streaming all working; 267 tests passing):
+
+```powershell
+# 1. Python 3.12 environment
+#    If conda create fails with NoChannelsConfiguredError (empty channels
+#    in .condarc), configure a mirror once first:
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
+conda create -n reachy-conversation-test python=3.12 -y
+conda activate reachy-conversation-test
+
+# 2. Dependencies — always use `python -m pip`
+#    (the SDK requires pip>=26.1; bare `pip install` refuses self-upgrade
+#     with "To modify pip, please run the following command...")
+#    mujoco (sim daemon) is already a project dependency. The first pip run
+#    triggers a gstreamer-bundle post-install download (tens of MB).
+python -m pip install -e ".[dev]"
+
+# 3. (Only if you hit a DLL error) Fix the GStreamer bundle libexpat conflict:
+#    normally automatic — the package preloads a compatible libexpat on
+#    import (including the daemon B subprocess). If you import reachy_mini
+#    directly (bypassing this package) and get "DLL load failed while
+#    importing pyexpat", replace the bundled copy manually:
+$envs = python -c "import sys; print(sys.prefix)"
+Copy-Item "$envs\Lib\site-packages\gstreamer_libs\bin\libexpat.dll" `
+          "$envs\Lib\site-packages\gstreamer_libs\bin\libexpat.dll.bak"
+Copy-Item "$envs\Library\bin\libexpat.dll" `
+          "$envs\Lib\site-packages\gstreamer_libs\bin\libexpat.dll" -Force
+
+# 4. Launch (start.ps1 auto-resolves the environment: conda env `reachy`
+#    first, otherwise the currently activated one)
+.\scripts\start.ps1          # pure sim
+.\scripts\start.ps1 -Wired   # wired robot (USB; auto-connects on start)
+
+# 5. (Optional) Hand-following model (~8 MB; hand tracking is disabled without it).
+#    The official storage.googleapis.com source is unreachable from China —
+#    use a GitHub mirror instead:
+mkdir ~\.cache\reachymini
+curl.exe -L -o ~\.cache\reachymini\hand_landmarker.task `
+  "https://gh-proxy.com/https://raw.githubusercontent.com/google-ai-edge/mediapipe-samples/main/examples/hand_landmarker/ios/HandLandmarker/hand_landmarker.task"
+# If gh-proxy.com fails too, try swapping the domain for: ghfast.top / mirror.ghproxy.com
+```
+
+Details in the Windows section of [`docs/INSTALL.md`](docs/INSTALL.md);
+for troubleshooting see the Windows section of
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) (serial port
+"Incorrect function / Access denied", TTS timeouts, libexpat DLL, robot not
+sleeping on disconnect, etc.).
+
+> 🪟 **Windows note**: `scripts/install_deps.sh` / `install_deps.ps1` are
+> legacy — **do not run them**. GStreamer/PyGObject on Windows is handled
+> automatically by the pip `gstreamer-bundle`; steps 1-4 above are all you need.
 
 **LAN access**: the UI listens on `0.0.0.0` — any phone / tablet / laptop on the same WiFi can open `http://<this-PC's-LAN-IP>:7860` directly (printed in the startup banner). Video feeds, the 3D view and TTS autoplay automatically follow whatever host was used to open the page — zero configuration.
 
@@ -265,7 +372,9 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 - ✅ 已完成:Web UI + Mujoco 仿真镜像、豆包 ASR 语音管线、声源定位、
   手部跟随、LLM 工具调用、局域网访问、三形态命令隔离(`--sim` /
   `--wired` / `--robot`)、on-robot 部署(无线版树莓派本体)
-- 🟡 P8:Windows 完整适配(脚本模板已就位,待真机验证)
+- ✅ P8(仿真侧已实测):Windows 原生适配 — 环境安装、仿真 daemon、
+  Web UI、视频流、全套测试已在 Windows 11 通过(见上文 Windows 章节);
+  有线真机连接待真机到手后验证
 - 🔵 P9.2 后续:on-robot 的手部跟随降级方案(浏览器端 JS MediaPipe,
   规避 CM4 缺 AES 指令无法运行 MediaPipe Python 的限制)
 - 已知硬件向限制:on-robot 模式下机器人麦克风若录音全零,按

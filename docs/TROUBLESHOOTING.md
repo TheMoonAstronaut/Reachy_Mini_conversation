@@ -421,6 +421,53 @@ curl -s http://localhost:7861/sim_feed_status   # frames_received 应 > 0 且增
 - **daemon 的 central signaling relay 反复报 `Connect call failed ('127.0.0.1', 8443)`**:
   webrtcsink 缺失时信令服务器不存在,relay 重试属预期噪音,不影响本地视频链路。
 
+### 16. Windows 常见问题(2026-09-29 全新环境实测整理)
+
+#### 16.1 `conda create` 报 `NoChannelsConfiguredError`
+
+`.condarc` 里 `channels: []`(空)。配一次镜像即可:
+
+```powershell
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
+```
+
+(每次 conda 命令开头刷的 `anaconda-anon-usage` 报错是 base 环境插件版本
+不匹配的噪音,无害;在意可 `conda activate base; conda remove -n base anaconda-anon-usage -y`。)
+
+#### 16.2 串口报"函数不正确"或"拒绝访问"(真机连不上,UI 显示具体报错)
+
+都是 **CH343 USB 串口驱动状态卡死**,不是应用问题。特征:没有任何进程
+占用 COM 口,但任何程序打开都失败。
+
+**修复**:拔掉机器人 USB 重新插入(或重启机器人电源);不行就重启
+Windows。平时避免在 daemon 运行中途直接拔线/断电——那正是把驱动
+弄卡死的典型操作。点「断开真机」让电机休眠后再拔,最安全。
+
+#### 16.3 `DLL load failed while importing pyexpat`
+
+GStreamer bundle 自带的 `libexpat.dll` 与 conda 的 `pyexpat.pyd` 冲突。
+
+**正常已自动修复**(包导入时预加载兼容副本,含 daemon B 子进程)。
+只有绕开本包直接 `import reachy_mini` 的脚本才可能踩到——按 README
+Windows 章节第 3 步手动替换,或先 `import reachymini_conversation`。
+
+#### 16.4 Edge TTS 频繁超时(TCP 通但 TLS 被重置,国内网络)
+
+不是软件问题,直连微软语音端点被干扰。有本地代理(Clash/v2ray)时在
+`env.json` 配 `"proxy": "http://127.0.0.1:端口"`(UI 保存即生效)。
+没代理就保持默认重试,或换网络环境。
+
+#### 16.5 点「断开真机」机器人不缩回/不休眠
+
+历史版本问题,已修复(断开 = HTTP 通知 daemon 停机 + 电机回缩休眠 +
+进程回收,实测 5 秒内完成)。若仍遇到:先看 `%TEMP%\reachy-daemon-real.log`
+末尾;机器人定格时多半是 daemon 被强杀——重启 app 连上再断开一次即可。
+
+#### 16.6 `python -m reachymini_conversation --ui` Ctrl+C 退不掉
+
+历史版本问题,已修复(中断后继续清理 + 强制退出兜底)。现在按一次
+Ctrl+C 即可,最多等几秒。
+
 ---
 
 ## English
@@ -547,6 +594,31 @@ curl -s http://localhost:7861/sim_feed_status
 
 See the Chinese section for detailed root causes (webrtcsink P7.B degradation,
 unixfd backport plugin, EGL vendor libs).
+
+### 16. Windows notes ( distilled from a 2026-09-29 fresh-env walkthrough)
+
+- **`NoChannelsConfiguredError` on `conda create`**: your `.condarc` has an
+  empty `channels: []`. Run once:
+  `conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/`
+  (The `anaconda-anon-usage` warning printed before every conda command is
+  harmless plugin-version noise.)
+- **Serial port "Incorrect function" / "Access denied" when connecting the
+  robot**: the CH343 USB-serial driver is in a stuck state (no process holds
+  the port, yet nothing can open it). Re-plug the robot's USB (or power-cycle
+  it); if that fails, reboot Windows. Avoid unplugging while the daemon is
+  running — use the UI "Disconnect" first.
+- **`DLL load failed while importing pyexpat`**: libexpat conflict with the
+  GStreamer bundle — fixed automatically when importing this package
+  (including the daemon B subprocess). Only scripts that `import reachy_mini`
+  directly can still hit it; see README step 3 for the manual fix.
+- **Frequent Edge TTS timeouts**: network interference on Microsoft's speech
+  endpoints (TCP connects, TLS gets reset). Configure a local proxy in
+  `env.json`: `"edge_tts": {..., "proxy": "http://127.0.0.1:7890"}`.
+- **Robot doesn't sleep on "Disconnect real robot"**: fixed — disconnect now
+  asks the daemon to shut down gracefully (motors retract, process reaped,
+  ~5 s). If the robot ever freezes mid-pose, reconnect and disconnect once.
+- **`--ui` not terminating on Ctrl+C**: fixed — cleanup runs and the process
+  force-exits.
 
 ---
 
